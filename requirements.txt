@@ -1,0 +1,25 @@
+# Core dependencies
+click>=8.0.0          # CLI framework
+requests>=2.28.0      # HTTP client for API calls
+python-dotenv>=0.19.0 # Environment variable management
+PyJWT>=2.8.0          # JWT token generation for Apple Music
+cryptography>=41.0.0  # Required for PyJWT ES256 algorithm
+boto3==1.35.0,<2.0.0
+
+# Music service APIs
+spotipy>=2.22.0       # Spotify Web API wrapper
+applepy              # Apple Music API wrapper (placeholder - may need alternative)
+
+# Data handling
+pydantic>=1.10.0      # Data validation and settings management
+pyyaml>=6.0           # YAML configuration files
+
+# Logging and monitoring
+structlog>=22.1.0     # Structured logging
+
+# Development dependencies (commented out for now)
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# black>=22.0.0
+# flake8>=5.0.0
+# mypy>=0.991

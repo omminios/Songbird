@@ -1,0 +1,106 @@
+# Songbird .gitignore
+
+# ============================================================================
+# SENSITIVE FILES - NEVER COMMIT
+# ============================================================================
+
+# Environment variables (API keys and secrets)
+.env
+.env.local
+
+# Token files
+data/spotify_tokens.json
+data/apple_tokens.json
+data/*_tokens.json
+
+# Apple Music private key
+*.p8
+
+# Configuration data
+data/config.json
+
+# Internal documentation
+Songbird PRD.md
+*PRD*.md
+
+
+# ============================================================================
+# PYTHON
+# ============================================================================
+
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking
+.mypy_cache/
+
+
+# ============================================================================
+# AWS / DEPLOYMENT
+# ============================================================================
+
+# Lambda deployment packages
+*.zip
+lambda_package.zip
+aws/package/
+
+
+# ============================================================================
+# IDE
+# ============================================================================
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+
+# ============================================================================
+# OPERATING SYSTEM
+# ============================================================================
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Linux
+*~
+
+
+# ============================================================================
+# PROJECT SPECIFIC
+# ============================================================================
+
+# Data directory (except when we explicitly add files)
+data/
+!data/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+*.tmp
+*.bak

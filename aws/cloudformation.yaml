@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Songbird - Playlist synchronization infrastructure'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: songbird
+    Description: Name of the project
+
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+
+Resources:
+  # S3 Bucket for configuration and logs
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectName}-config-${Environment}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+            Prefix: logs/
+
+  # IAM Role for Lambda function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SongbirdLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - !Sub '${ConfigBucket}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Ref ConfigBucket
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/songbird/*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Lambda function
+  SyncLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-sync-${Environment}'
+      Runtime: python3.9
+      Handler: lambda_function.lambda_handler
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Function deployed successfully - upload actual code')
+              }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          SONGBIRD_CONFIG_BUCKET: !Ref ConfigBucket
+          ENVIRONMENT: !Ref Environment
+      DeadLetterQueue:
+        TargetArn: !GetAtt DeadLetterQueue.Arn
+
+  # Dead Letter Queue for failed Lambda executions
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub '${ProjectName}-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # API Gateway for manual sync triggers
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ProjectName}-api-${Environment}'
+      Description: 'Songbird API for manual sync triggers'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Resource
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: sync
+
+  # API Gateway Method
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SyncLambdaFunction.Arn}/invocations'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: 500
+          ResponseModels:
+            application/json: Empty
+
+  # API Gateway Deployment
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiGatewayMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+      StageName: !Ref Environment
+
+  # Lambda permission for API Gateway
+  ApiGatewayLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*'
+
+  # EventBridge rule for scheduled sync
+  ScheduledSyncRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${ProjectName}-scheduled-sync-${Environment}'
+      Description: 'Daily playlist sync schedule'
+      ScheduleExpression: 'rate(1 day)'  # Run once per day
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SyncLambdaFunction.Arn
+          Id: SongbirdSyncTarget
+          Input: |
+            {
+              "source": "aws.events",
+              "trigger": "scheduled",
+              "detail-type": "Scheduled Event"
+            }
+
+  # Lambda permission for EventBridge
+  EventBridgeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SyncLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledSyncRule.Arn
+
+  # CloudWatch Log Group for Lambda
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${SyncLambdaFunction}'
+      RetentionInDays: 14
+
+  # Systems Manager Parameters for API secrets
+  SpotifyClientIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /songbird/spotify/client_id
+      Type: SecureString
+      Value: 'REPLACE_WITH_ACTUAL_CLIENT_ID'
+      Description: 'Spotify Client ID for Songbird'
+
+  SpotifyClientSecretParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /songbird/spotify/client_secret
+      Type: SecureString
+      Value: 'REPLACE_WITH_ACTUAL_CLIENT_SECRET'
+      Description: 'Spotify Client Secret for Songbird'
+
+  AppleTeamIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /songbird/apple/team_id
+      Type: SecureString
+      Value: 'REPLACE_WITH_ACTUAL_TEAM_ID'
+      Description: 'Apple Music Team ID for Songbird'
+
+  AppleKeyIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /songbird/apple/key_id
+      Type: SecureString
+      Value: 'REPLACE_WITH_ACTUAL_KEY_ID'
+      Description: 'Apple Music Key ID for Songbird'
+
+Outputs:
+  ApiGatewayUrl:
+    Description: 'API Gateway endpoint URL for manual sync'
+    Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/sync'
+    Export:
+      Name: !Sub '${ProjectName}-api-url-${Environment}'
+
+  ConfigBucketName:
+    Description: 'S3 bucket name for configuration storage'
+    Value: !Ref ConfigBucket
+    Export:
+      Name: !Sub '${ProjectName}-config-bucket-${Environment}'
+
+  LambdaFunctionName:
+    Description: 'Lambda function name for sync'
+    Value: !Ref SyncLambdaFunction
+    Export:
+      Name: !Sub '${ProjectName}-lambda-name-${Environment}'
+
+  LambdaFunctionArn:
+    Description: 'Lambda function ARN'
+    Value: !GetAtt SyncLambdaFunction.Arn
+    Export:
+      Name: !Sub '${ProjectName}-lambda-arn-${Environment}'
