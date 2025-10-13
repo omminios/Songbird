@@ -9,18 +9,33 @@ from typing import Dict, List, Optional
 from songbird.auth.spotify import SpotifyAuth
 from songbird.auth.apple import AppleAuth
 
+try:
+    import boto3
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+
 
 class ConfigManager:
     """Manages configuration, playlist pairs, and sync status"""
 
     def __init__(self):
-        self.config_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data')
-        self.config_file = os.path.join(self.config_dir, 'config.json')
-        self.ensure_config_dir()
+        # S3 configuration (always required)
+        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
+        if not self.s3_bucket:
+            raise ValueError(
+                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
+                "Please set it to your S3 bucket name:\n"
+                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
+            )
 
-    def ensure_config_dir(self):
-        """Ensure configuration directory exists"""
-        os.makedirs(self.config_dir, exist_ok=True)
+        if not BOTO3_AVAILABLE:
+            raise ImportError(
+                "boto3 is required for S3 storage.\n"
+                "Install with: pip install boto3"
+            )
+
+        self.s3_client = boto3.client('s3')
 
     def has_valid_auth(self) -> bool:
         """Check if both Spotify and Apple Music are authenticated"""
@@ -39,24 +54,34 @@ class ConfigManager:
         return len(pairs) > 0
 
     def load_config(self) -> Dict:
-        """Load configuration from file"""
-        if not os.path.exists(self.config_file):
-            return self._get_default_config()
-
+        """Load configuration from S3"""
         try:
-            with open(self.config_file, 'r') as f:
-                return json.load(f)
+            response = self.s3_client.get_object(
+                Bucket=self.s3_bucket,
+                Key='config.json'
+            )
+            config_data = json.loads(response['Body'].read())
+            return config_data
+        except self.s3_client.exceptions.NoSuchKey:
+            # No config in S3 yet, return default
+            return self._get_default_config()
         except Exception as e:
-            print(f"Error loading config: {e}")
+            print(f"❌ Failed to load config from S3: {e}")
             return self._get_default_config()
 
     def save_config(self, config: Dict):
-        """Save configuration to file"""
+        """Save configuration to S3"""
         try:
-            with open(self.config_file, 'w') as f:
-                json.dump(config, f, indent=2)
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket,
+                Key='config.json',
+                Body=json.dumps(config, indent=2),
+                ServerSideEncryption='AES256',
+                ContentType='application/json'
+            )
         except Exception as e:
-            print(f"Error saving config: {e}")
+            print(f"❌ Failed to save config to S3: {e}")
+            raise
 
     def _get_default_config(self) -> Dict:
         """Return default configuration"""

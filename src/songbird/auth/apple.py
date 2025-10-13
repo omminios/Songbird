@@ -11,6 +11,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+try:
+    import boto3
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+
 
 class AppleAuth:
     """Handles Apple Music API authentication using JWT tokens"""
@@ -19,6 +25,23 @@ class AppleAuth:
         self.team_id = os.getenv('APPLE_TEAM_ID')
         self.key_id = os.getenv('APPLE_KEY_ID')
         self.private_key_path = os.getenv('APPLE_PRIVATE_KEY_PATH')
+
+        # S3 configuration (always required)
+        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
+        if not self.s3_bucket:
+            raise ValueError(
+                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
+                "Please set it to your S3 bucket name:\n"
+                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
+            )
+
+        if not BOTO3_AVAILABLE:
+            raise ImportError(
+                "boto3 is required for S3 storage.\n"
+                "Install with: pip install boto3"
+            )
+
+        self.s3_client = boto3.client('s3')
 
         if not all([self.team_id, self.key_id, self.private_key_path]):
             raise ValueError(
@@ -107,37 +130,34 @@ class AppleAuth:
             return False
 
     def _save_token(self, token):
-        """Save JWT token to secure storage"""
+        """Save JWT token to S3"""
         token_data = {
             'token': token,
             'created_at': datetime.now(timezone.utc).isoformat(),
             'expires_at': (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat()
         }
 
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'apple_tokens.json')
-        os.makedirs(os.path.dirname(tokens_file), exist_ok=True)
-
-        with open(tokens_file, 'w') as f:
-            json.dump(token_data, f, indent=2)
-
-        print(f"Apple Music token saved to {tokens_file}")
+        try:
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket,
+                Key='tokens/apple_tokens.json',
+                Body=json.dumps(token_data, indent=2),
+                ServerSideEncryption='AES256',
+                ContentType='application/json'
+            )
+            print(f"✅ Apple Music token saved to s3://{self.s3_bucket}/tokens/apple_tokens.json")
+        except Exception as e:
+            print(f"❌ Failed to save Apple Music token to S3: {e}")
+            raise
 
     def get_valid_token(self):
         """Get a valid JWT token, regenerating if necessary"""
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'apple_tokens.json')
+        # Try to load existing token from S3
+        token_data = self._load_token()
 
-        # Check if token file exists and is still valid
-        if os.path.exists(tokens_file):
-            try:
-                with open(tokens_file, 'r') as f:
-                    token_data = json.load(f)
-
-                # Check if token is still valid (not expired)
-                if self._is_token_valid(token_data):
-                    return token_data['token']
-
-            except Exception as e:
-                print(f"Error reading token file: {e}")
+        # Check if token exists and is still valid
+        if token_data and self._is_token_valid(token_data):
+            return token_data['token']
 
         # Token doesn't exist or is expired, generate new one
         new_token = self._generate_jwt_token()
@@ -146,6 +166,22 @@ class AppleAuth:
             return new_token
 
         return None
+
+    def _load_token(self):
+        """Load token from S3"""
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.s3_bucket,
+                Key='tokens/apple_tokens.json'
+            )
+            token_data = json.loads(response['Body'].read())
+            return token_data
+        except self.s3_client.exceptions.NoSuchKey:
+            # No token exists yet, will generate new one
+            return None
+        except Exception as e:
+            print(f"❌ Failed to load Apple Music token from S3: {e}")
+            return None
 
     def _is_token_valid(self, token_data):
         """
@@ -195,19 +231,16 @@ class AppleAuth:
         Returns:
             Dict with token status information
         """
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'apple_tokens.json')
+        token_data = self._load_token()
 
-        if not os.path.exists(tokens_file):
+        if not token_data:
             return {
                 'exists': False,
                 'valid': False,
-                'message': 'No token file found'
+                'message': 'No token found in S3'
             }
 
         try:
-            with open(tokens_file, 'r') as f:
-                token_data = json.load(f)
-
             expires_at = datetime.fromisoformat(token_data['expires_at'])
             created_at = datetime.fromisoformat(token_data['created_at'])
             now = datetime.now(timezone.utc)

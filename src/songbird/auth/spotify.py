@@ -1,6 +1,7 @@
 """
 Spotify OAuth 2.0 authentication handler
 """
+import boto3
 import os
 import webbrowser
 import base64
@@ -60,8 +61,25 @@ class SpotifyAuth:
     def __init__(self):
         self.client_id = os.getenv('SPOTIFY_CLIENT_ID')
         self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
-        self.redirect_uri = 'http://localhost:8888/callback'
+        self.redirect_uri = 'http://127.0.0.1:8888/callback'
         self.scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
+
+        # S3 configuration (always required)
+        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
+        if not self.s3_bucket:
+            raise ValueError(
+                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
+                "Please set it to your S3 bucket name:\n"
+                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
+            )
+
+        if not boto3:
+            raise ImportError(
+                "boto3 is required for S3 storage.\n"
+                "Install with: pip install boto3"
+            )
+
+        self.s3_client = boto3.client('s3')
 
         if not self.client_id or not self.client_secret:
             raise ValueError(
@@ -72,6 +90,7 @@ class SpotifyAuth:
     def authenticate(self):
         """
         Perform OAuth 2.0 authentication flow
+        Runs locally with browser interaction, saves tokens directly to S3
         Returns True if successful, False otherwise
         """
         try:
@@ -85,7 +104,7 @@ class SpotifyAuth:
             if not tokens:
                 return False
 
-            # Step 3: Save tokens
+            # Step 3: Save tokens to S3
             self._save_tokens(tokens)
             return True
 
@@ -107,7 +126,7 @@ class SpotifyAuth:
         auth_url = f"https://accounts.spotify.com/authorize?{urlencode(auth_params)}"
 
         # Start local server for callback
-        server = HTTPServer(('localhost', 8888), CallbackHandler)
+        server = HTTPServer(('127.0.0.1', 8888), CallbackHandler)
         server.auth_code = None
         server.timeout = 120  # 2 minute timeout
 
@@ -165,11 +184,7 @@ class SpotifyAuth:
             return None
 
     def _save_tokens(self, tokens):
-        """Save tokens to secure storage with timestamp"""
-        # For now, save to local file (TODO: move to S3/encrypted storage)
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'spotify_tokens.json')
-        os.makedirs(os.path.dirname(tokens_file), exist_ok=True)
-
+        """Save tokens to S3 with timestamp"""
         # Add timestamp for expiry tracking
         token_data = {
             'access_token': tokens['access_token'],
@@ -180,20 +195,26 @@ class SpotifyAuth:
             'obtained_at': time.time()  # Unix timestamp when token was obtained
         }
 
-        with open(tokens_file, 'w') as f:
-            json.dump(token_data, f, indent=2)
-
-        print(f"Tokens saved to {tokens_file}")
+        try:
+            self.s3_client.put_object(
+                Bucket=self.s3_bucket,
+                Key='tokens/spotify_tokens.json',
+                Body=json.dumps(token_data, indent=2),
+                ServerSideEncryption='AES256',
+                ContentType='application/json'
+            )
+            print(f"✅ Tokens saved to s3://{self.s3_bucket}/tokens/spotify_tokens.json")
+        except Exception as e:
+            print(f"❌ Failed to save tokens to S3: {e}")
+            raise
 
     def get_valid_token(self):
         """Get a valid access token, refreshing if necessary"""
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'spotify_tokens.json')
+        # Load tokens from S3
+        token_data = self._load_tokens()
 
-        if not os.path.exists(tokens_file):
+        if not token_data:
             return None
-
-        with open(tokens_file, 'r') as f:
-            token_data = json.load(f)
 
         # Check if token is expired
         if self._is_token_expired(token_data):
@@ -208,6 +229,22 @@ class SpotifyAuth:
                 return None
 
         return token_data.get('access_token')
+
+    def _load_tokens(self):
+        """Load tokens from S3"""
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.s3_bucket,
+                Key='tokens/spotify_tokens.json'
+            )
+            token_data = json.loads(response['Body'].read())
+            return token_data
+        except self.s3_client.exceptions.NoSuchKey:
+            print(f"❌ No tokens found in S3. Please run 'songbird auth spotify' first")
+            return None
+        except Exception as e:
+            print(f"❌ Failed to load tokens from S3: {e}")
+            return None
 
     def _is_token_expired(self, token_data):
         """Check if access token is expired or will expire soon"""
@@ -278,35 +315,6 @@ class SpotifyAuth:
             print(f"Token refresh error: {e}")
             return None
 
-    def refresh_token_manually(self):
-        """
-        Manually refresh the Spotify token
-        Useful for testing or forcing a refresh
-
-        Returns:
-            New access token or None if refresh failed
-        """
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'spotify_tokens.json')
-
-        if not os.path.exists(tokens_file):
-            print("No token file found. Please authenticate first.")
-            return None
-
-        with open(tokens_file, 'r') as f:
-            token_data = json.load(f)
-
-        if 'refresh_token' not in token_data:
-            print("No refresh token found. Please re-authenticate.")
-            return None
-
-        new_tokens = self._refresh_access_token(token_data['refresh_token'])
-        if new_tokens:
-            self._save_tokens(new_tokens)
-            print("Spotify token refreshed successfully")
-            return new_tokens['access_token']
-        else:
-            print("Failed to refresh Spotify token")
-            return None
 
     def get_token_info(self):
         """
@@ -315,19 +323,16 @@ class SpotifyAuth:
         Returns:
             Dict with token status information
         """
-        tokens_file = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'data', 'spotify_tokens.json')
+        token_data = self._load_tokens()
 
-        if not os.path.exists(tokens_file):
+        if not token_data:
             return {
                 'exists': False,
                 'valid': False,
-                'message': 'No token file found'
+                'message': 'No tokens found in S3'
             }
 
         try:
-            with open(tokens_file, 'r') as f:
-                token_data = json.load(f)
-
             if 'obtained_at' not in token_data or 'expires_in' not in token_data:
                 return {
                     'exists': True,

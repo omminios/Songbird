@@ -43,6 +43,37 @@ def apple():
         click.echo("❌ Apple Music authentication failed!")
 
 
+@auth.command(name='token-info')
+def token_info():
+    """Show Spotify token status and expiration information"""
+    click.echo("🔑 Spotify Token Information:")
+
+    try:
+        auth_handler = SPA()
+        info = auth_handler.get_token_info()
+
+        if not info.get('exists'):
+            click.echo("  ❌ No token found")
+            click.echo("  Run 'songbird auth spotify' to authenticate")
+            return
+
+        if not info.get('valid'):
+            click.echo(f"  ❌ Token invalid: {info.get('message', 'Unknown error')}")
+            if 'error' in info:
+                click.echo(f"  Error: {info['error']}")
+            return
+
+        # Token exists and is valid
+        click.echo("  ✅ Token is valid")
+        click.echo(f"  Obtained at: {info.get('obtained_at', 'Unknown')}")
+        click.echo(f"  Expires at: {info.get('expires_at', 'Unknown')}")
+        click.echo(f"  Time remaining: {info.get('time_remaining_minutes', 0):.1f} minutes")
+        click.echo(f"  Has refresh token: {'Yes' if info.get('has_refresh_token') else 'No'}")
+
+    except Exception as e:
+        click.echo(f"  ❌ Error retrieving token info: {e}")
+
+
 @cli.command()
 def pair():
     """Select and pair playlists between services"""
