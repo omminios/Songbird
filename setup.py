@@ -10,7 +10,7 @@ setup(
     name="songbird",
     version="0.1.0",
     author="Songbird Project",
-    description="Sync playlists between Spotify and Apple Music",
+    description="Sync playlists between Spotify and YouTube Music",
     long_description=long_description,
     long_description_content_type="text/markdown",
     package_dir={"": "src"},

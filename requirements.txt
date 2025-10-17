@@ -6,10 +6,11 @@ PyJWT>=2.8.0          # JWT token generation for Apple Music
 cryptography>=41.0.0  # Required for PyJWT ES256 algorithm
 boto3==1.35.0,<2.0.0
 setuptools== 80.9.0
+ytmusicapi== 1.11.1
 
 # Music service APIs
 spotipy>=2.22.0       # Spotify Web API wrapper
-applepy              # Apple Music API wrapper (placeholder - may need alternative)
+ytmusicapi>=1.11.0    # YouTube Music API wrapper
 
 # Data handling
 pydantic>=1.10.0      # Data validation and settings management

@@ -3,7 +3,7 @@ Songbird CLI - Main entry point for all commands
 """
 import click
 from songbird.auth.spotify import SpotifyAuth as SPA
-from songbird.auth.apple import AppleAuth as AA
+from songbird.auth.youtube import YouTubeAuth as YTA
 from songbird.config.manager import ConfigManager
 from songbird.sync.manager import SyncManager
 
@@ -11,7 +11,7 @@ from songbird.sync.manager import SyncManager
 @click.group()
 @click.version_option('1.0.0')
 def cli():
-    """Songbird - Sync playlists between Spotify and Apple Music"""
+    """Songbird - Sync playlists between Spotify and YouTube Music"""
     pass
 
 
@@ -33,45 +33,53 @@ def spotify():
 
 
 @auth.command()
-def apple():
-    """Authenticate with Apple Music"""
-    click.echo("🍎 Starting Apple Music authentication...")
-    auth_handler = AA()
+def youtube():
+    """Authenticate with YouTube Music"""
+    click.echo("📺 Starting YouTube Music authentication...")
+    auth_handler = YTA()
     if auth_handler.authenticate():
-        click.echo("✅ Apple Music authentication successful!")
+        click.echo("✅ YouTube Music authentication successful!")
     else:
-        click.echo("❌ Apple Music authentication failed!")
+        click.echo("❌ YouTube Music authentication failed!")
 
 
 @auth.command(name='token-info')
-def token_info():
-    """Show Spotify token status and expiration information"""
-    click.echo("🔑 Spotify Token Information:")
+@click.option('--debug', is_flag=True, help='Show detailed debugging information')
+def token_info(debug):
+    """Show token status for Spotify and YouTube Music"""
+    click.echo("\n" + "=" * 70)
+    click.echo("Authentication Token Information")
+    if debug:
+        click.echo("DEBUG MODE ENABLED")
+    click.echo("=" * 70)
 
+    # Spotify Token Info
+    click.echo("\nSPOTIFY:")
+    click.echo("-" * 70)
     try:
-        auth_handler = SPA()
-        info = auth_handler.get_token_info()
-
-        if not info.get('exists'):
-            click.echo("  ❌ No token found")
-            click.echo("  Run 'songbird auth spotify' to authenticate")
-            return
-
-        if not info.get('valid'):
-            click.echo(f"  ❌ Token invalid: {info.get('message', 'Unknown error')}")
-            if 'error' in info:
-                click.echo(f"  Error: {info['error']}")
-            return
-
-        # Token exists and is valid
-        click.echo("  ✅ Token is valid")
-        click.echo(f"  Obtained at: {info.get('obtained_at', 'Unknown')}")
-        click.echo(f"  Expires at: {info.get('expires_at', 'Unknown')}")
-        click.echo(f"  Time remaining: {info.get('time_remaining_minutes', 0):.1f} minutes")
-        click.echo(f"  Has refresh token: {'Yes' if info.get('has_refresh_token') else 'No'}")
-
+        spotify_auth = SPA()
+        spotify_auth.display_token_info(debug=debug)
     except Exception as e:
-        click.echo(f"  ❌ Error retrieving token info: {e}")
+        click.echo(f"  Error retrieving Spotify token info: {e}")
+        if debug:
+            import traceback
+            click.echo("\n  Full traceback:")
+            click.echo(traceback.format_exc())
+
+    # YouTube Music Token Info
+    click.echo("\nYOUTUBE MUSIC:")
+    click.echo("-" * 70)
+    try:
+        youtube_auth = YTA()
+        youtube_auth.display_token_info(debug=debug)
+    except Exception as e:
+        click.echo(f"  Error retrieving YouTube token info: {e}")
+        if debug:
+            import traceback
+            click.echo("\n  Full traceback:")
+            click.echo(traceback.format_exc())
+
+    click.echo("\n" + "=" * 70)
 
 
 @cli.command()

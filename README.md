@@ -1,11 +1,11 @@
 # Songbird
 
-Sync playlists between Spotify and Apple Music with automatic and manual synchronization.
+Sync playlists between Spotify and YouTube Music with automatic and manual synchronization.
 
 ## Features
 
 - 🎵 Spotify authentication and playlist access
-- 🍎 Apple Music API integration (in development)
+- 🎬 YouTube Music API integration (in development)
 - 🔗 Interactive playlist pairing
 - 🔄 Manual and automatic sync
 - 📊 Sync status and error reporting
@@ -52,18 +52,9 @@ SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
-### 2. Apple Music (Coming Soon)
+### 2. YouTube Music (Coming Soon)
 
-Apple Music integration requires:
-- Apple Developer account
-- MusicKit setup
-- Private key (.p8 file)
-
-```env
-APPLE_TEAM_ID=your_team_id
-APPLE_KEY_ID=your_key_id
-APPLE_PRIVATE_KEY_PATH=path/to/your/private_key.p8
-```
+YouTube Music integration will use OAuth 2.0 authentication.
 
 ## Usage
 
@@ -73,8 +64,8 @@ APPLE_PRIVATE_KEY_PATH=path/to/your/private_key.p8
 # Authenticate with Spotify
 songbird auth spotify
 
-# Authenticate with Apple Music (coming soon)
-songbird auth apple
+# Authenticate with YouTube Music (coming soon)
+songbird auth youtube
 ```
 
 ### Pair Playlists
@@ -115,7 +106,7 @@ songbird auth --help
 - Local sync functionality (demo mode)
 
 ### 🚧 In Progress
-- Apple Music user token integration
+- YouTube Music OAuth integration
 - AWS Lambda sync function
 - API Gateway manual trigger
 - Error handling and logging improvements
@@ -131,7 +122,7 @@ songbird auth --help
 ```
 CLI Commands:
 ├── songbird auth spotify    # OAuth flow
-├── songbird auth apple      # OAuth flow
+├── songbird auth youtube    # OAuth flow
 ├── songbird pair           # Select & pair playlists
 ├── songbird sync           # Manual sync
 └── songbird status         # Show status
@@ -145,7 +136,7 @@ AWS:
 
 ## Current Limitations
 
-1. **Apple Music**: User token authentication not yet implemented
+1. **YouTube Music**: OAuth authentication not yet implemented
 2. **Sync**: Currently runs locally, AWS Lambda integration pending
 3. **Scheduling**: Manual sync only, automatic scheduling pending
 

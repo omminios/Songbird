@@ -8,7 +8,7 @@ import requests
 from datetime import datetime
 from typing import Dict, List, Tuple
 from songbird.config.manager import ConfigManager
-from songbird.sync.playlist_manager import SpotifyPlaylistManager, ApplePlaylistManager
+from songbird.sync.playlist_manager import SpotifyPlaylistManager, YouTubePlaylistManager
 from songbird.sync.song_matcher import SongMatcher
 
 
@@ -18,7 +18,7 @@ class SyncManager:
     def __init__(self):
         self.config_manager = ConfigManager()
         self.spotify_manager = SpotifyPlaylistManager()
-        self.apple_manager = ApplePlaylistManager()
+        self.youtube_manager = YouTubePlaylistManager()
         self.song_matcher = SongMatcher()
 
     def manual_sync(self) -> bool:
@@ -49,7 +49,7 @@ class SyncManager:
         all_success = True
 
         for pair in pairs:
-            print(f"\n📋 Syncing: {pair['spotify']['name']} ↔ {pair['apple']['name']}")
+            print(f"\n📋 Syncing: {pair['spotify']['name']} ↔ {pair['youtube']['name']}")
 
             try:
                 success = self._sync_playlist_pair(pair)
@@ -87,17 +87,13 @@ class SyncManager:
         try:
             # Get current tracks from both playlists
             spotify_tracks = self._get_spotify_tracks(pair['spotify']['id'])
-            apple_tracks = self._get_apple_tracks(pair['apple']['id'])
+            youtube_tracks = self._get_youtube_tracks(pair['youtube']['id'])
 
             print(f"  Spotify: {len(spotify_tracks)} tracks")
-            print(f"  Apple Music: {len(apple_tracks)} tracks")
-
-            # For demo mode (Apple Music not fully implemented)
-            if not apple_tracks:
-                return self._demo_sync_spotify_only(pair, spotify_tracks)
+            print(f"  YouTube Music: {len(youtube_tracks)} tracks")
 
             # Determine what needs to be synced
-            sync_plan = self._create_sync_plan(spotify_tracks, apple_tracks)
+            sync_plan = self._create_sync_plan(spotify_tracks, youtube_tracks)
 
             # Execute sync plan
             return self._execute_sync_plan(pair, sync_plan)
@@ -114,71 +110,38 @@ class SyncManager:
             print(f"  Failed to get Spotify tracks: {e}")
             return []
 
-    def _get_apple_tracks(self, playlist_id: str) -> List[Dict]:
-        """Get tracks from Apple Music playlist"""
+    def _get_youtube_tracks(self, playlist_id: str) -> List[Dict]:
+        """Get tracks from YouTube Music playlist"""
         try:
-            # For now, return empty list since Apple Music integration is incomplete
-            return self.apple_manager.get_playlist_tracks(playlist_id)
+            return self.youtube_manager.get_playlist_tracks(playlist_id)
         except Exception as e:
-            print(f"  Apple Music tracks not available: {e}")
+            print(f"  YouTube Music tracks not available: {e}")
             return []
 
-    def _demo_sync_spotify_only(self, pair: Dict, spotify_tracks: List[Dict]) -> bool:
-        """Demo sync for Spotify-only mode"""
-        print("  🔧 Demo mode: Spotify playlist analysis")
-
-        if not spotify_tracks:
-            print("  No tracks found in Spotify playlist")
-            return True
-
-        # Analyze tracks
-        print(f"  📊 Playlist contains {len(spotify_tracks)} tracks:")
-
-        # Show sample tracks
-        for i, track in enumerate(spotify_tracks[:3]):
-            print(f"    {i+1}. {track['name']} by {track['artist']}")
-
-        if len(spotify_tracks) > 3:
-            print(f"    ... and {len(spotify_tracks) - 3} more")
-
-        # Simulate matching process
-        print("  🔍 Simulating song matching...")
-        match_results = self.song_matcher.batch_match_songs(
-            spotify_tracks[:5],  # Test with first 5 tracks
-            'apple'
-        )
-
-        print(f"  📈 Match simulation results:")
-        print(f"    - Matched: {len(match_results['matched'])}")
-        print(f"    - Unmatched: {len(match_results['unmatched'])}")
-        print(f"    - Errors: {len(match_results['errors'])}")
-
-        return True
-
-    def _create_sync_plan(self, spotify_tracks: List[Dict], apple_tracks: List[Dict]) -> Dict:
+    def _create_sync_plan(self, spotify_tracks: List[Dict], youtube_tracks: List[Dict]) -> Dict:
         """
         Create a sync plan by comparing playlists
         Returns what needs to be added/removed from each service
         """
         # Match existing tracks
-        spotify_to_apple = self.song_matcher.batch_match_songs(spotify_tracks, 'apple')
-        apple_to_spotify = self.song_matcher.batch_match_songs(apple_tracks, 'spotify')
+        spotify_to_youtube = self.song_matcher.batch_match_songs(spotify_tracks, 'youtube')
+        youtube_to_spotify = self.song_matcher.batch_match_songs(youtube_tracks, 'spotify')
 
         # Find tracks that need to be added
         spotify_only = [track for track in spotify_tracks
                        if not any(track['id'] == match[0]['id']
-                                for match in apple_to_spotify['matched'])]
+                                for match in youtube_to_spotify['matched'])]
 
-        apple_only = [track for track in apple_tracks
+        youtube_only = [track for track in youtube_tracks
                      if not any(track['id'] == match[0]['id']
-                              for match in spotify_to_apple['matched'])]
+                              for match in spotify_to_youtube['matched'])]
 
         return {
-            'add_to_spotify': apple_only,
-            'add_to_apple': spotify_only,
-            'matched_tracks': spotify_to_apple['matched'],
-            'unmatched_spotify': spotify_to_apple['unmatched'],
-            'unmatched_apple': apple_to_spotify['unmatched']
+            'add_to_spotify': youtube_only,
+            'add_to_youtube': spotify_only,
+            'matched_tracks': spotify_to_youtube['matched'],
+            'unmatched_spotify': spotify_to_youtube['unmatched'],
+            'unmatched_youtube': youtube_to_spotify['unmatched']
         }
 
     def _execute_sync_plan(self, pair: Dict, sync_plan: Dict) -> bool:
@@ -186,20 +149,18 @@ class SyncManager:
         success = True
 
         try:
-            # Add Spotify tracks to Apple Music
-            if sync_plan['add_to_apple']:
-                print(f"  ➕ Adding {len(sync_plan['add_to_apple'])} tracks to Apple Music")
-                # TODO: Implement when Apple Music is ready
-                # success &= self._add_tracks_to_apple(pair['apple']['id'], sync_plan['add_to_apple'])
+            # Add Spotify tracks to YouTube Music
+            if sync_plan['add_to_youtube']:
+                print(f"  ➕ Adding {len(sync_plan['add_to_youtube'])} tracks to YouTube Music")
+                success &= self._add_tracks_to_youtube(pair['youtube']['id'], sync_plan['add_to_youtube'])
 
-            # Add Apple Music tracks to Spotify
+            # Add YouTube Music tracks to Spotify
             if sync_plan['add_to_spotify']:
                 print(f"  ➕ Adding {len(sync_plan['add_to_spotify'])} tracks to Spotify")
-                # TODO: Implement when Apple Music is ready
-                # success &= self._add_tracks_to_spotify(pair['spotify']['id'], sync_plan['add_to_spotify'])
+                success &= self._add_tracks_to_spotify(pair['spotify']['id'], sync_plan['add_to_spotify'])
 
             # Log unmatched tracks
-            if sync_plan['unmatched_spotify'] or sync_plan['unmatched_apple']:
+            if sync_plan['unmatched_spotify'] or sync_plan['unmatched_youtube']:
                 self._log_unmatched_tracks(pair, sync_plan)
 
         except Exception as e:
@@ -227,20 +188,39 @@ class SyncManager:
 
         return False
 
+    def _add_tracks_to_youtube(self, playlist_id: str, tracks: List[Dict]) -> bool:
+        """Add tracks to YouTube Music playlist"""
+        try:
+            # Find YouTube equivalents for the tracks
+            youtube_ids = []
+            for track in tracks:
+                match = self.song_matcher.find_matching_song(track, 'youtube')
+                if match:
+                    youtube_ids.append(match['id'])
+
+            if youtube_ids:
+                self.youtube_manager.add_tracks_to_playlist(playlist_id, youtube_ids)
+                return True
+
+        except Exception as e:
+            print(f"Failed to add tracks to YouTube: {e}")
+
+        return False
+
     def _log_unmatched_tracks(self, pair: Dict, sync_plan: Dict):
         """Log tracks that couldn't be matched"""
         unmatched_data = {
             'pair_id': pair['id'],
             'spotify_playlist': pair['spotify']['name'],
-            'apple_playlist': pair['apple']['name'],
+            'youtube_playlist': pair['youtube']['name'],
             'unmatched_spotify': sync_plan['unmatched_spotify'],
-            'unmatched_apple': sync_plan['unmatched_apple'],
+            'unmatched_youtube': sync_plan['unmatched_youtube'],
             'timestamp': datetime.now(datetime.UTC).isoformat()
         }
 
         self.config_manager.log_error(
             'unmatched_tracks',
-            f"Found {len(sync_plan['unmatched_spotify']) + len(sync_plan['unmatched_apple'])} unmatched tracks",
+            f"Found {len(sync_plan['unmatched_spotify']) + len(sync_plan['unmatched_youtube'])} unmatched tracks",
             unmatched_data
         )
 

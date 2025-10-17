@@ -316,9 +316,12 @@ class SpotifyAuth:
             return None
 
 
-    def get_token_info(self):
+    def get_token_info(self, debug=False):
         """
         Get information about current token status
+
+        Args:
+            debug: If True, include detailed error information
 
         Returns:
             Dict with token status information
@@ -334,11 +337,18 @@ class SpotifyAuth:
 
         try:
             if 'obtained_at' not in token_data or 'expires_in' not in token_data:
-                return {
+                result = {
                     'exists': True,
                     'valid': False,
                     'message': 'Old token format - please re-authenticate'
                 }
+                if debug:
+                    result['debug_info'] = {
+                        'has_obtained_at': 'obtained_at' in token_data,
+                        'has_expires_in': 'expires_in' in token_data,
+                        'token_keys': list(token_data.keys())
+                    }
+                return result
 
             obtained_at = token_data['obtained_at']
             expires_in = token_data['expires_in']
@@ -346,26 +356,98 @@ class SpotifyAuth:
             current_time = time.time()
 
             is_expired = self._is_token_expired(token_data)
+            has_refresh_token = 'refresh_token' in token_data
             time_remaining = max(0, expires_at - current_time)
 
-            return {
+            # Token is considered "valid" if it has a refresh token (even if access token expired)
+            # The system will auto-refresh when needed
+            result = {
                 'exists': True,
-                'valid': not is_expired,
+                'valid': has_refresh_token,  # Valid if we can refresh
                 'obtained_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(obtained_at)),
                 'expires_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expires_at)),
                 'time_remaining_seconds': time_remaining,
                 'time_remaining_minutes': time_remaining / 60,
-                'has_refresh_token': 'refresh_token' in token_data
+                'has_refresh_token': has_refresh_token,
+                'is_expired': is_expired
             }
 
+            # Add helpful message based on state
+            if not has_refresh_token:
+                result['message'] = 'No refresh token - please re-authenticate'
+            elif is_expired:
+                result['message'] = 'Access token expired but will auto-refresh on first use'
+            else:
+                result['message'] = 'Token is active'
+
+            if debug:
+                result['debug_info'] = {
+                    'current_time': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time)),
+                    'is_expired': is_expired,
+                    'buffer_seconds': 300,
+                    'raw_obtained_at': obtained_at,
+                    'raw_expires_in': expires_in
+                }
+
+            return result
+
         except Exception as e:
-            return {
+            result = {
                 'exists': True,
                 'valid': False,
                 'error': str(e),
+                'error_type': type(e).__name__,
                 'message': 'Error reading token data'
             }
+            if debug:
+                import traceback
+                result['debug_info'] = {
+                    'traceback': traceback.format_exc(),
+                    'token_data_keys': list(token_data.keys()) if token_data else None
+                }
+            return result
 
     def is_authenticated(self):
         """Check if user is authenticated"""
         return self.get_valid_token() is not None
+
+    def display_token_info(self, debug=False):
+        """
+        Display token information to the console
+
+        Args:
+            debug: If True, show detailed debugging information
+        """
+        import json
+
+        spotify_info = self.get_token_info(debug=debug)
+
+        if not spotify_info.get('exists'):
+            print("  Status: No token found")
+            print("  Run 'songbird auth spotify' to authenticate")
+        elif not spotify_info.get('valid'):
+            print(f"  Status: Invalid")
+            print(f"  Message: {spotify_info.get('message', 'Unknown error')}")
+            if 'error' in spotify_info:
+                print(f"  Error: {spotify_info['error']}")
+            if 'error_type' in spotify_info:
+                print(f"  Error type: {spotify_info['error_type']}")
+            if debug and 'debug_info' in spotify_info:
+                print("\n  Debug Info:")
+                print(json.dumps(spotify_info['debug_info'], indent=4))
+        else:
+            # Token exists and is valid
+            is_expired = spotify_info.get('is_expired', False)
+            print(f"  Status: {'Ready (token will auto-refresh)' if is_expired else 'Active'}")
+            print(f"  Message: {spotify_info.get('message', 'Token is active')}")
+            print(f"  Obtained at: {spotify_info.get('obtained_at', 'Unknown')}")
+            print(f"  Expires at: {spotify_info.get('expires_at', 'Unknown')}")
+
+            if not is_expired:
+                print(f"  Time remaining: {spotify_info.get('time_remaining_minutes', 0):.1f} minutes")
+
+            print(f"  Has refresh token: {'Yes' if spotify_info.get('has_refresh_token') else 'No'}")
+
+            if debug and 'debug_info' in spotify_info:
+                print("\n  Debug Info:")
+                print(json.dumps(spotify_info['debug_info'], indent=4))

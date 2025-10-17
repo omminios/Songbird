@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from typing import Dict, List, Optional
 from songbird.auth.spotify import SpotifyAuth
-from songbird.auth.apple import AppleAuth
+from songbird.auth.youtube import YouTubeAuth
 
 try:
     import boto3
@@ -38,12 +38,11 @@ class ConfigManager:
         self.s3_client = boto3.client('s3')
 
     def has_valid_auth(self) -> bool:
-        """Check if both Spotify and Apple Music are authenticated"""
+        """Check if both Spotify and YouTube Music are authenticated"""
         try:
             spotify_auth = SpotifyAuth()
-            apple_auth = AppleAuth()
-
-            return spotify_auth.is_authenticated() and apple_auth.is_authenticated()
+            youtube_auth = YouTubeAuth()
+            return spotify_auth.is_authenticated() and youtube_auth.is_authenticated()
         except Exception:
             return False
 
@@ -95,7 +94,7 @@ class ConfigManager:
             'error_log': []
         }
 
-    def add_playlist_pair(self, spotify_playlist: Dict, apple_playlist: Dict):
+    def add_playlist_pair(self, spotify_playlist: Dict, youtube_playlist: Dict):
         """Add a new playlist pair"""
         config = self.load_config()
 
@@ -106,9 +105,9 @@ class ConfigManager:
                 'name': spotify_playlist['name'],
                 'uri': spotify_playlist['uri']
             },
-            'apple': {
-                'id': apple_playlist['id'],
-                'name': apple_playlist['name']
+            'youtube': {
+                'id': youtube_playlist['id'],
+                'name': youtube_playlist['name']
             },
             'created_at': datetime.now(datetime.UTC).isoformat(),
             'last_sync': None
@@ -117,7 +116,7 @@ class ConfigManager:
         config['playlist_pairs'].append(pair)
         self.save_config(config)
 
-        print(f"✅ Paired '{spotify_playlist['name']}' with '{apple_playlist['name']}'")
+        print(f"✅ Paired '{spotify_playlist['name']}' with '{youtube_playlist['name']}'")
 
     def get_playlist_pairs(self) -> List[Dict]:
         """Get all configured playlist pairs"""

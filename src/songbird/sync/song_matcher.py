@@ -1,19 +1,19 @@
 """
-Song matching logic between Spotify and Apple Music
+Song matching logic between Spotify and YouTube Music
 Handles finding equivalent tracks across services with fuzzy matching
 """
 import re
 from typing import List, Dict, Optional, Tuple
 from difflib import SequenceMatcher
-from songbird.sync.playlist_manager import SpotifyPlaylistManager, ApplePlaylistManager
+from songbird.sync.playlist_manager import SpotifyPlaylistManager, YouTubePlaylistManager
 
 
 class SongMatcher:
-    """Handles matching songs between Spotify and Apple Music"""
+    """Handles matching songs between Spotify and YouTube Music"""
 
     def __init__(self):
         self.spotify_manager = SpotifyPlaylistManager()
-        self.apple_manager = ApplePlaylistManager()
+        self.youtube_manager = YouTubePlaylistManager()
 
     def find_matching_song(self, source_track: Dict, target_service: str) -> Optional[Dict]:
         """
@@ -21,7 +21,7 @@ class SongMatcher:
 
         Args:
             source_track: Track from source service
-            target_service: 'spotify' or 'apple'
+            target_service: 'spotify' or 'youtube'
 
         Returns:
             Best matching track or None if no good match found
@@ -103,8 +103,8 @@ class SongMatcher:
         try:
             if service == 'spotify':
                 return self.spotify_manager.search_tracks(query, limit=10)
-            elif service == 'apple':
-                return self.apple_manager.search_tracks(query, limit=10)
+            elif service == 'youtube':
+                return self.youtube_manager.search_tracks(query, limit=10)
             else:
                 raise ValueError(f"Unknown service: {service}")
         except Exception as e:

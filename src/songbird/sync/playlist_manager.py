@@ -1,11 +1,11 @@
 """
-Playlist management for Spotify and Apple Music
+Playlist management for Spotify and YouTube Music
 Handles fetching playlists and playlist data
 """
 import requests
 from typing import List, Dict, Optional
 from songbird.auth.spotify import SpotifyAuth
-from songbird.auth.apple import AppleAuth
+from songbird.auth.youtube import YouTubeAuth
 
 
 class SpotifyPlaylistManager:
@@ -190,65 +190,185 @@ class SpotifyPlaylistManager:
         return response.json()['id']
 
 
-class ApplePlaylistManager:
-    """Manages Apple Music playlist operations"""
+class YouTubePlaylistManager:
+    """Manages YouTube Music playlist operations"""
 
     def __init__(self):
-        self.auth = AppleAuth()
-        self.base_url = 'https://api.music.apple.com/v1'
+        self.auth = YouTubeAuth()
 
     def get_user_playlists(self) -> List[Dict]:
         """
-        Get user playlists from Apple Music
-        Note: This requires a user token, not just developer token
+        Get user playlists from YouTube Music
+
+        Returns:
+            List of playlist dictionaries
         """
-        # For now, return empty list with instructions
-        # TODO: Implement once user token flow is established
-        print("⚠️  Apple Music playlist access requires user authentication")
-        print(self.auth.get_user_token_instructions())
-        return []
+        client = self.auth.get_client()
+        if not client:
+            raise Exception("No valid YouTube Music client available")
 
-    def get_playlist_tracks(self, playlist_id: str) -> List[Dict]:
-        """Get tracks from an Apple Music playlist"""
-        # TODO: Implement once user token flow is established
-        return []
+        try:
+            # Get library playlists from YouTube Music
+            playlists = client.get_library_playlists(limit=100)
 
-    def search_tracks(self, query: str, limit: int = 20) -> List[Dict]:
-        """Search for tracks on Apple Music"""
-        token = self.auth.get_valid_token()
-        if not token:
-            raise Exception("No valid Apple Music token available")
-
-        headers = {
-            'Authorization': f'Bearer {token}'
-        }
-
-        params = {
-            'term': query,
-            'types': 'songs',
-            'limit': limit
-        }
-
-        response = requests.get(
-            f'{self.base_url}/catalog/us/search',
-            headers=headers,
-            params=params
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"Apple Music search failed: {response.status_code}")
-
-        data = response.json()
-        tracks = []
-
-        if 'songs' in data['results']:
-            for track in data['results']['songs']['data']:
-                tracks.append({
-                    'id': track['id'],
-                    'name': track['attributes']['name'],
-                    'artist': track['attributes']['artistName'],
-                    'album': track['attributes']['albumName'],
-                    'duration_ms': track['attributes']['durationInMillis']
+            # Format to match Spotify structure
+            formatted = []
+            for playlist in playlists:
+                formatted.append({
+                    'id': playlist['playlistId'],
+                    'name': playlist['title'],
+                    'uri': f"ytmusic:playlist:{playlist['playlistId']}",
+                    'tracks_total': playlist.get('count', 0),
+                    'public': True
                 })
 
-        return tracks
+            return formatted
+
+        except Exception as e:
+            raise Exception(f"Failed to fetch YouTube playlists: {e}")
+
+    def get_playlist_tracks(self, playlist_id: str) -> List[Dict]:
+        """
+        Get tracks from a YouTube Music playlist
+
+        Args:
+            playlist_id: YouTube Music playlist ID
+
+        Returns:
+            List of track dictionaries
+        """
+        client = self.auth.get_client()
+        if not client:
+            raise Exception("No valid YouTube Music client available")
+
+        try:
+            # Get playlist details including tracks
+            playlist_data = client.get_playlist(playlist_id, limit=None)
+
+            if 'tracks' not in playlist_data:
+                return []
+
+            # Format tracks to match Spotify structure
+            formatted = []
+            for track in playlist_data['tracks']:
+                # Skip if track data is incomplete
+                if not track.get('videoId'):
+                    continue
+
+                # Get artist names
+                artists = []
+                if track.get('artists'):
+                    artists = [artist['name'] for artist in track['artists']]
+
+                # Get duration in milliseconds (YouTube returns seconds)
+                duration_ms = None
+                if track.get('duration_seconds'):
+                    duration_ms = int(track['duration_seconds']) * 1000
+
+                formatted.append({
+                    'id': track['videoId'],
+                    'name': track.get('title', ''),
+                    'artist': ', '.join(artists),
+                    'album': '',  # YouTube Music doesn't always have album info
+                    'uri': f"ytmusic:track:{track['videoId']}",
+                    'duration_ms': duration_ms,
+                    'setVideoId': track.get('setVideoId')  # Needed for removal
+                })
+
+            return formatted
+
+        except Exception as e:
+            raise Exception(f"Failed to fetch YouTube playlist tracks: {e}")
+
+    def add_tracks_to_playlist(self, playlist_id: str, track_ids: List[str]):
+        """
+        Add tracks to a YouTube Music playlist
+
+        Args:
+            playlist_id: YouTube playlist ID
+            track_ids: List of video IDs to add
+        """
+        if not track_ids:
+            return
+
+        client = self.auth.get_client()
+        if not client:
+            raise Exception("No valid YouTube Music client available")
+
+        try:
+            # YouTube Music API allows batch adding
+            client.add_playlist_items(playlist_id, track_ids)
+
+        except Exception as e:
+            raise Exception(f"Failed to add tracks to YouTube playlist: {e}")
+
+    def remove_tracks_from_playlist(self, playlist_id: str, set_video_ids: List[str]):
+        """
+        Remove tracks from a YouTube Music playlist
+
+        Args:
+            playlist_id: YouTube playlist ID
+            set_video_ids: List of setVideoIds (unique playlist item identifiers)
+        """
+        if not set_video_ids:
+            return
+
+        client = self.auth.get_client()
+        if not client:
+            raise Exception("No valid YouTube Music client available")
+
+        try:
+            # YouTube Music API requires setVideoIds for removal
+            client.remove_playlist_items(playlist_id, set_video_ids)
+
+        except Exception as e:
+            raise Exception(f"Failed to remove tracks from YouTube playlist: {e}")
+
+    def search_tracks(self, query: str, limit: int = 20) -> List[Dict]:
+        """
+        Search for tracks on YouTube Music
+
+        Args:
+            query: Search query (track name and artist)
+            limit: Maximum number of results
+
+        Returns:
+            List of track dictionaries
+        """
+        client = self.auth.get_client()
+        if not client:
+            raise Exception("No valid YouTube Music client available")
+
+        try:
+            # Search for songs on YouTube Music
+            results = client.search(query, filter='songs', limit=limit)
+
+            # Format results to match Spotify structure
+            formatted = []
+            for track in results:
+                if not track.get('videoId'):
+                    continue
+
+                # Get artist names
+                artists = []
+                if track.get('artists'):
+                    artists = [artist['name'] for artist in track['artists']]
+
+                # Get duration
+                duration_ms = None
+                if track.get('duration_seconds'):
+                    duration_ms = int(track['duration_seconds']) * 1000
+
+                formatted.append({
+                    'id': track['videoId'],
+                    'name': track.get('title', ''),
+                    'artist': ', '.join(artists),
+                    'album': track.get('album', {}).get('name', ''),
+                    'uri': f"ytmusic:track:{track['videoId']}",
+                    'duration_ms': duration_ms
+                })
+
+            return formatted
+
+        except Exception as e:
+            raise Exception(f"YouTube Music search failed: {e}")

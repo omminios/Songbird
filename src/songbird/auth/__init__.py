@@ -1,1 +1,1 @@
-# Authentication modules for Spotify and Apple Music
+# Authentication modules for Spotify and YouTube Music
