@@ -5,7 +5,7 @@ Handles the main sync logic and orchestrates all components
 import json
 import boto3
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 from songbird.config.manager import ConfigManager
 from songbird.sync.playlist_manager import SpotifyPlaylistManager, YouTubePlaylistManager
@@ -57,7 +57,7 @@ class SyncManager:
                     self.config_manager.update_sync_status(
                         pair['id'],
                         'success',
-                        {'synced_at': datetime.now(datetime.UTC).isoformat()}
+                        {'synced_at': datetime.now(timezone.utc).isoformat()}
                     )
                     print(f"✅ Sync completed for pair {pair['id']}")
                 else:
@@ -128,13 +128,15 @@ class SyncManager:
         youtube_to_spotify = self.song_matcher.batch_match_songs(youtube_tracks, 'spotify')
 
         # Find tracks that need to be added
+        # Spotify tracks that don't have a match in YouTube (should be added to YouTube)
         spotify_only = [track for track in spotify_tracks
                        if not any(track['id'] == match[0]['id']
-                                for match in youtube_to_spotify['matched'])]
+                                for match in spotify_to_youtube['matched'])]
 
+        # YouTube tracks that don't have a match in Spotify (should be added to Spotify)
         youtube_only = [track for track in youtube_tracks
                      if not any(track['id'] == match[0]['id']
-                              for match in spotify_to_youtube['matched'])]
+                              for match in youtube_to_spotify['matched'])]
 
         return {
             'add_to_spotify': youtube_only,
@@ -174,38 +176,60 @@ class SyncManager:
         try:
             # Find Spotify equivalents for the tracks
             spotify_uris = []
+            unmatched_count = 0
+
             for track in tracks:
                 match = self.song_matcher.find_matching_song(track, 'spotify')
                 if match:
                     spotify_uris.append(match['uri'])
+                else:
+                    unmatched_count += 1
 
             if spotify_uris:
                 self.spotify_manager.add_tracks_to_playlist(playlist_id, spotify_uris)
-                return True
+                print(f"    ✅ Added {len(spotify_uris)} tracks to Spotify")
+
+            if unmatched_count > 0:
+                print(f"    ⚠️  Could not find Spotify matches for {unmatched_count} tracks")
+
+            # Return True if we processed all tracks (even if some couldn't be matched)
+            return True
 
         except Exception as e:
-            print(f"Failed to add tracks to Spotify: {e}")
-
-        return False
+            print(f"    ❌ Failed to add tracks to Spotify: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def _add_tracks_to_youtube(self, playlist_id: str, tracks: List[Dict]) -> bool:
         """Add tracks to YouTube Music playlist"""
         try:
             # Find YouTube equivalents for the tracks
             youtube_ids = []
+            unmatched_count = 0
+
             for track in tracks:
                 match = self.song_matcher.find_matching_song(track, 'youtube')
                 if match:
                     youtube_ids.append(match['id'])
+                else:
+                    unmatched_count += 1
 
             if youtube_ids:
                 self.youtube_manager.add_tracks_to_playlist(playlist_id, youtube_ids)
-                return True
+                print(f"    ✅ Added {len(youtube_ids)} tracks to YouTube Music")
+
+            if unmatched_count > 0:
+                print(f"    ⚠️  Could not find YouTube Music matches for {unmatched_count} tracks")
+
+            # Return True if we processed all tracks (even if some couldn't be matched)
+            return True
 
         except Exception as e:
-            print(f"Failed to add tracks to YouTube: {e}")
-
-        return False
+            print(f"    ❌ Failed to add tracks to YouTube Music: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     def _log_unmatched_tracks(self, pair: Dict, sync_plan: Dict):
         """Log tracks that couldn't be matched"""
@@ -215,7 +239,7 @@ class SyncManager:
             'youtube_playlist': pair['youtube']['name'],
             'unmatched_spotify': sync_plan['unmatched_spotify'],
             'unmatched_youtube': sync_plan['unmatched_youtube'],
-            'timestamp': datetime.now(datetime.UTC).isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
 
         self.config_manager.log_error(
@@ -238,7 +262,7 @@ class SyncManager:
                 InvocationType='RequestResponse',
                 Payload=json.dumps({
                     'trigger': 'manual',
-                    'timestamp': datetime.now(datetime.UTC).isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 })
             )
 
@@ -262,7 +286,7 @@ class SyncManager:
                 api_endpoint,
                 json={
                     'trigger': 'manual',
-                    'timestamp': datetime.now(datetime.UTC).isoformat()
+                    'timestamp': datetime.now(timezone.utc).isoformat()
                 },
                 timeout=30
             )

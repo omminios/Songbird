@@ -343,27 +343,42 @@ class YouTubePlaylistManager:
             # Search for songs on YouTube Music
             results = client.search(query, filter='songs', limit=limit)
 
+            # Check if results is None or empty
+            if results is None:
+                return []
+
+            if not isinstance(results, list):
+                return []
+
             # Format results to match Spotify structure
             formatted = []
             for track in results:
+                if not track or not isinstance(track, dict):
+                    continue
+
                 if not track.get('videoId'):
                     continue
 
                 # Get artist names
                 artists = []
                 if track.get('artists'):
-                    artists = [artist['name'] for artist in track['artists']]
+                    artists = [artist['name'] for artist in track['artists'] if artist and isinstance(artist, dict)]
 
                 # Get duration
                 duration_ms = None
                 if track.get('duration_seconds'):
                     duration_ms = int(track['duration_seconds']) * 1000
 
+                # Get album info safely
+                album_name = ''
+                if track.get('album') and isinstance(track.get('album'), dict):
+                    album_name = track['album'].get('name', '')
+
                 formatted.append({
                     'id': track['videoId'],
                     'name': track.get('title', ''),
                     'artist': ', '.join(artists),
-                    'album': track.get('album', {}).get('name', ''),
+                    'album': album_name,
                     'uri': f"ytmusic:track:{track['videoId']}",
                     'duration_ms': duration_ms
                 })

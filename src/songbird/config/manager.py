@@ -4,7 +4,7 @@ Handles playlist pairs, sync settings, and authentication status
 """
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from songbird.auth.spotify import SpotifyAuth
 from songbird.auth.youtube import YouTubeAuth
@@ -109,7 +109,7 @@ class ConfigManager:
                 'id': youtube_playlist['id'],
                 'name': youtube_playlist['name']
             },
-            'created_at': datetime.now(datetime.UTC).isoformat(),
+            'created_at': datetime.now(timezone.utc).isoformat(),
             'last_sync': None
         }
 
@@ -138,14 +138,14 @@ class ConfigManager:
 
         for pair in pairs:
             if pair.get('id') == pair_id:
-                pair['last_sync'] = datetime.now(datetime.UTC).isoformat()
+                pair['last_sync'] = datetime.now(timezone.utc).isoformat()
                 pair['last_sync_status'] = status
                 if details:
                     pair['last_sync_details'] = details
                 break
 
         # Update global sync status
-        config['sync_settings']['last_sync'] = datetime.now(datetime.UTC).isoformat()
+        config['sync_settings']['last_sync'] = datetime.now(timezone.utc).isoformat()
         self.save_config(config)
 
     def get_sync_status(self) -> Optional[Dict]:
@@ -168,7 +168,7 @@ class ConfigManager:
         config = self.load_config()
 
         error_entry = {
-            'timestamp': datetime.now(datetime.UTC).isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'type': error_type,
             'message': message,
             'details': details or {}

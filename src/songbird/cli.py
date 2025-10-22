@@ -100,6 +100,17 @@ def pair():
     except Exception as e:
         click.echo(f"❌ Spotify authentication check failed: {e}")
         return
+    
+    try:
+        from songbird.auth.youtube import YouTubeAuth as YTA
+        youtube_auth = YTA()
+        if not youtube_auth.is_authenticated():
+            click.echo("❌ Please authenticate with Youtube Music first:")
+            click.echo("  songbird auth youtube")
+            return
+    except Exception as e:
+        click.echo(f"❌ Youtube Music authentication check failed: {e}")
+        return
 
     # Start pairing process
     pairing = PlaylistPairing()
@@ -143,6 +154,15 @@ def status():
         pairing.show_current_pairs()
     else:
         click.echo("  No sync history found")
+
+
+@cli.command(name='clear-errors')
+@click.confirmation_option(prompt='Are you sure you want to clear all error logs?')
+def clear_errors():
+    """Clear all error logs from S3 config"""
+    config = ConfigManager()
+    config.clear_errors()
+    click.echo("✅ Error logs cleared successfully!")
 
 
 if __name__ == '__main__':

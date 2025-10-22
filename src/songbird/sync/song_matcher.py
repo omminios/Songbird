@@ -104,11 +104,15 @@ class SongMatcher:
             if service == 'spotify':
                 return self.spotify_manager.search_tracks(query, limit=10)
             elif service == 'youtube':
-                return self.youtube_manager.search_tracks(query, limit=10)
+                results = self.youtube_manager.search_tracks(query, limit=10)
+                # Ensure we return a list, not None
+                return results if results is not None else []
             else:
                 raise ValueError(f"Unknown service: {service}")
         except Exception as e:
             print(f"Search error in {service}: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def _find_best_match(self, source_track: Dict, candidates: List[Dict]) -> Optional[Dict]:

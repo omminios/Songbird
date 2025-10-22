@@ -1,26 +1,21 @@
 """
-YouTube Music OAuth 2.0 authentication handler
+YouTube Music Browser Cookie authentication handler
+Uses browser cookies instead of OAuth for reliable YouTube Music API access
 """
 import boto3
 import os
 import json
 import time
-import webbrowser
-from ytmusicapi import YTMusic
-from ytmusicapi.auth.oauth.credentials import OAuthCredentials
-from ytmusicapi.auth.oauth.token import RefreshingToken
+from ytmusicapi import YTMusic, setup
 from dotenv import load_dotenv
 
 load_dotenv()
 
 
 class YouTubeAuth:
-    """Handles YouTube Music OAuth 2.0 authentication flow"""
+    """Handles YouTube Music browser cookie authentication"""
 
     def __init__(self):
-        self.client_id = os.getenv('YOUTUBE_CLIENT_ID')
-        self.client_secret = os.getenv('YOUTUBE_CLIENT_SECRET')
-
         # S3 configuration (always required)
         self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
         if not self.s3_bucket:
@@ -38,103 +33,120 @@ class YouTubeAuth:
 
         self.s3_client = boto3.client('s3')
 
-        if not self.client_id or not self.client_secret:
-            raise ValueError(
-                "Missing YouTube Music credentials. Please set YOUTUBE_CLIENT_ID and "
-                "YOUTUBE_CLIENT_SECRET environment variables."
-            )
-
     def authenticate(self, open_browser=True):
         """
-        Perform OAuth 2.0 authentication flow for YouTube Music
+        Perform browser cookie authentication for YouTube Music
 
         Args:
-            open_browser: If True, automatically open browser with auth URL
+            open_browser: If True, provide instructions to open browser
 
         Returns True if successful, False otherwise
         """
         try:
-            print("\n📺 YouTube Music OAuth Setup")
+            print("\n📺 YouTube Music Browser Authentication Setup")
             print("=" * 70)
-            print("\nThis will guide you through YouTube Music authentication.")
+            print("\nYouTube Music doesn't have an official OAuth API.")
+            print("Instead, we'll use browser cookies from your YouTube Music session.")
+            print("\nThis is a one-time setup. Cookies typically last ~1 year.")
 
-            print("\n⚠️  IMPORTANT: Google OAuth App Verification")
-            print("-" * 70)
-            print("Since Songbird is in development, you may see a warning that says:")
-            print("  'Google hasn't verified this app'")
-            print("\nTo continue:")
-            print("  1. Click 'Advanced' or 'Show Advanced'")
-            print("  2. Click 'Go to Songbird (unsafe)' or 'Continue'")
-            print("  3. This is safe - you're authorizing YOUR OWN app")
-            print("-" * 70)
-
-            print("\nPress Enter to continue...")
-            input()
-
-            # Create OAuth credentials
-            oauth_credentials = OAuthCredentials(
-                client_id=self.client_id,
-                client_secret=self.client_secret
-            )
-
-            # Get the device code
-            print("\n🔄 Requesting authorization code from Google...")
-            code_info = oauth_credentials.get_code()
-
-            # Display the authorization information prominently
             print("\n" + "=" * 70)
-            print("🔑 AUTHORIZATION CODE")
+            print("STEP-BY-STEP INSTRUCTIONS")
             print("=" * 70)
-            print(f"\n  Code: {code_info['user_code']}")
-            print(f"\n  URL:  {code_info['verification_url']}")
+
+            print("\n📝 Step 1: Open YouTube Music")
+            print("  1. Go to: https://music.youtube.com")
+            print("  2. Make sure you're logged in with your Google account")
+
+            print("\n📝 Step 2: Open Browser Developer Tools")
+            print("  - Chrome/Edge: Press F12 or Ctrl+Shift+I")
+            print("  - Firefox: Press F12 or Ctrl+Shift+I")
+            print("  - Safari: Enable 'Develop' menu, then press Cmd+Option+I")
+
+            print("\n📝 Step 3: Go to Network Tab")
+            print("  1. Click on the 'Network' tab in DevTools")
+            print("  2. Make sure 'Preserve log' is checked")
+
+            print("\n📝 Step 4: Trigger a Request")
+            print("  1. In YouTube Music, click on your 'Library' or any playlist")
+            print("  2. In the Network tab, look for a request to 'browse' or 'youtubei'")
+            print("  3. Click on that request")
+
+            print("\n📝 Step 5: Copy Request Headers")
+            print("  1. In the request details, find the 'Request Headers' section")
+            print("  2. Look for the full headers block (it starts with things like:")
+            print("     accept: */*")
+            print("     content-type: application/json")
+            print("     cookie: ...")
+            print("  3. Copy ALL the request headers")
+
+            print("\n" + "=" * 70)
+            print("ALTERNATIVE: Copy as cURL")
+            print("=" * 70)
+            print("\nIf the above is too complex, you can:")
+            print("  1. Right-click on the 'browse' request in Network tab")
+            print("  2. Select 'Copy' → 'Copy as cURL'")
+            print("  3. Paste the entire cURL command when prompted below")
+
             print("\n" + "=" * 70)
 
-            # Build the full URL with the code pre-filled
-            full_url = f"{code_info['verification_url']}?user_code={code_info['user_code']}"
+            input("\n⏸️  Press Enter when you're ready to paste the headers...")
 
-            print(f"\n📋 Full URL (code pre-filled): {full_url}")
+            print("\n📋 Now paste your request headers below.")
+            print("Paste everything and press Ctrl+D (Linux/Mac) or Ctrl+Z then Enter (Windows) when done:")
+            print("=" * 70)
 
-            if open_browser:
-                print("\n🌐 Opening browser...")
-                webbrowser.open(full_url)
+            # Use ytmusicapi's setup function to parse headers
+            # We'll capture the headers manually
+            import sys
+            from io import StringIO
 
-            print("\n📝 Steps to complete:")
-            print("  1. Visit the URL above (should open automatically)")
-            print("  2. Sign in with your Google account")
-            print("  3. Click 'Advanced' → 'Go to Songbird (unsafe)' if you see a warning")
-            print("  4. Grant the requested permissions")
-            print("  5. Return here and press Enter when done")
+            # Redirect stdout to capture what setup() would print
+            old_stdout = sys.stdout
+            sys.stdout = StringIO()
 
-            input("\n⏸️  Press Enter after completing authorization (Ctrl-C to cancel)...")
+            try:
+                # Read multi-line input
+                headers_input = []
+                print("\n(Paste headers and press Ctrl+D or Ctrl+Z+Enter when done)")
+                sys.stdout = old_stdout  # Restore stdout for this print
 
-            # Exchange device code for access token
-            print("\n🔄 Exchanging code for access token...")
-            raw_token = oauth_credentials.token_from_code(code_info["device_code"])
+                while True:
+                    try:
+                        line = input()
+                        headers_input.append(line)
+                    except EOFError:
+                        break
 
-            # Create refreshing token
-            oauth_token = RefreshingToken(credentials=oauth_credentials, **raw_token)
-            oauth_token.update(oauth_token.as_dict())
+                headers_text = '\n'.join(headers_input)
 
-            # Get token as dictionary for YTMusic
-            token_dict = oauth_token.as_dict()
+                # Parse the headers using ytmusicapi's setup function
+                # Save to temporary file
+                temp_file = 'temp_youtube_headers.json'
 
-            # Create YTMusic instance with the token dictionary AND oauth_credentials
-            ytmusic = YTMusic(token_dict, oauth_credentials=oauth_credentials)
+                # Parse headers manually since setup() is interactive
+                auth_data = self._parse_headers(headers_text)
 
-            # Prepare data to save to S3
-            oauth_data = {
-                'client_id': self.client_id,
-                'client_secret': self.client_secret,
-                'token': token_dict,
-                'obtained_at': time.time()
-            }
+                if not auth_data:
+                    print("\n❌ Failed to parse headers. Please try again.")
+                    return False
 
-            # Save OAuth configuration to S3
-            self._save_oauth(oauth_data, ytmusic)
+                # Test the authentication
+                print("\n🔄 Testing authentication...")
+                ytmusic = YTMusic(auth_data)
 
-            print("\n✅ YouTube Music authentication successful!")
-            print("✅ Tokens saved to S3")
-            return True
+                # Try a simple API call
+                ytmusic.get_library_playlists(limit=1)
+                print("✅ Authentication verified!")
+
+                # Save to S3
+                self._save_auth(auth_data)
+
+                print("\n✅ YouTube Music authentication successful!")
+                print("✅ Cookies saved to S3")
+                return True
+
+            finally:
+                sys.stdout = old_stdout
 
         except KeyboardInterrupt:
             print("\n\n❌ Authentication cancelled by user")
@@ -145,26 +157,127 @@ class YouTubeAuth:
             traceback.print_exc()
             return False
 
-    def _save_oauth(self, oauth_data, ytmusic_instance):
-        """Save OAuth configuration to S3"""
+    def _parse_headers(self, headers_text):
+        """
+        Parse headers from pasted text
+        Supports both raw headers and cURL format
+        """
         try:
-            # Get the headers/auth from ytmusic instance
-            # ytmusicapi handles token storage internally
-            auth_data = {
-                'oauth_config': oauth_data,
+            # Check if it's a cURL command
+            if 'curl' in headers_text.lower() and 'music.youtube.com' in headers_text:
+                return self._parse_curl(headers_text)
+            else:
+                return self._parse_raw_headers(headers_text)
+        except Exception as e:
+            print(f"❌ Error parsing headers: {e}")
+            return None
+
+    def _parse_curl(self, curl_command):
+        """Parse headers from cURL command"""
+        import re
+        from urllib.parse import unquote
+
+        # Remove Windows line continuation characters and clean up
+        curl_command = curl_command.replace('^', '').replace('\n', ' ').replace('\r', '')
+
+        # URL decode any encoded characters
+        curl_command = unquote(curl_command)
+
+        # Extract headers from cURL
+        headers = {}
+
+        # Try multiple header patterns for different cURL formats
+        patterns = [
+            r'-H\s+"([^:]+):\s*([^"]+)"',  # -H "header: value"
+            r"-H\s+'([^:]+):\s*([^']+)'",  # -H 'header: value'
+            r'--header\s+"([^:]+):\s*([^"]+)"',  # --header "header: value"
+            r"--header\s+'([^:]+):\s*([^']+)'",  # --header 'header: value'
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, curl_command, re.IGNORECASE)
+            for key, value in matches:
+                # Clean up the value
+                value = value.strip()
+                headers[key.lower().strip()] = value
+
+        # Extract cookie separately using -b flag
+        cookie_patterns = [
+            r'-b\s+"([^"]+)"',  # -b "cookie"
+            r"-b\s+'([^']+)'",  # -b 'cookie'
+            r'--cookie\s+"([^"]+)"',  # --cookie "cookie"
+            r"--cookie\s+'([^']+)'",  # --cookie 'cookie'
+        ]
+
+        for pattern in cookie_patterns:
+            cookie_match = re.search(pattern, curl_command, re.IGNORECASE)
+            if cookie_match:
+                cookie_value = cookie_match.group(1)
+                # Clean up cookie value
+                cookie_value = cookie_value.strip()
+                headers['cookie'] = cookie_value
+                break
+
+        # Convert to ytmusicapi format
+        if headers:
+            return self._format_headers(headers)
+
+        return None
+
+    def _parse_raw_headers(self, headers_text):
+        """Parse raw request headers"""
+        headers = {}
+        lines = headers_text.strip().split('\n')
+
+        for line in lines:
+            if ':' in line:
+                key, value = line.split(':', 1)
+                headers[key.strip().lower()] = value.strip()
+
+        if headers:
+            return self._format_headers(headers)
+
+        return None
+
+    def _format_headers(self, headers):
+        """Format headers for ytmusicapi"""
+        # ytmusicapi expects specific headers
+        formatted = {}
+
+        # Required headers
+        if 'cookie' in headers:
+            formatted['cookie'] = headers['cookie']
+        if 'x-goog-authuser' in headers:
+            formatted['X-Goog-AuthUser'] = headers['x-goog-authuser']
+        if 'authorization' in headers and 'SAPISIDHASH' in headers['authorization']:
+            formatted['authorization'] = headers['authorization']
+        if 'x-origin' in headers:
+            formatted['X-Origin'] = headers['x-origin']
+
+        # Must have at least cookie
+        if 'cookie' not in formatted:
+            raise ValueError("No cookie found in headers. Make sure to copy headers from a YouTube Music request.")
+
+        return formatted
+
+    def _save_auth(self, auth_data):
+        """Save authentication data to S3"""
+        try:
+            save_data = {
+                'auth_data': auth_data,
                 'created_at': time.time()
             }
 
             self.s3_client.put_object(
                 Bucket=self.s3_bucket,
-                Key='tokens/youtube_oauth.json',
-                Body=json.dumps(auth_data, indent=2),
+                Key='tokens/youtube_auth.json',
+                Body=json.dumps(save_data, indent=2),
                 ServerSideEncryption='AES256',
                 ContentType='application/json'
             )
-            print(f"✅ OAuth config saved to s3://{self.s3_bucket}/tokens/youtube_oauth.json")
+            print(f"✅ Auth data saved to s3://{self.s3_bucket}/tokens/youtube_auth.json")
         except Exception as e:
-            print(f"❌ Failed to save OAuth config to S3: {e}")
+            print(f"❌ Failed to save auth data to S3: {e}")
             raise
 
     def get_client(self):
@@ -173,41 +286,20 @@ class YouTubeAuth:
         Returns YTMusic instance or None if not authenticated
         """
         try:
-            # Load OAuth config from S3
-            oauth_data = self._load_oauth()
+            # Load auth data from S3
+            auth_data = self._load_auth()
 
-            if not oauth_data:
+            if not auth_data:
                 return None
 
-            # Get the nested oauth_config
-            config = oauth_data.get('oauth_config')
-            if not config:
-                print("❌ No oauth_config found in saved data")
+            # Get the auth headers
+            headers = auth_data.get('auth_data')
+            if not headers:
+                print("❌ No auth headers found in saved data")
                 return None
 
-            # Get the saved token
-            token_data = config.get('token')
-            if not token_data:
-                print("❌ No token found in saved OAuth data")
-                return None
-
-            # Get client credentials
-            client_id = config.get('client_id')
-            client_secret = config.get('client_secret')
-
-            if not client_id or not client_secret:
-                print("❌ Missing client credentials in saved data")
-                return None
-
-            # Create OAuth credentials
-            oauth_credentials = OAuthCredentials(
-                client_id=client_id,
-                client_secret=client_secret
-            )
-
-            # Create YTMusic client with the saved token and credentials
-            # ytmusicapi will handle token refresh automatically
-            ytmusic = YTMusic(token_data, oauth_credentials=oauth_credentials)
+            # Create YTMusic client
+            ytmusic = YTMusic(headers)
 
             return ytmusic
 
@@ -217,20 +309,20 @@ class YouTubeAuth:
             traceback.print_exc()
             return None
 
-    def _load_oauth(self):
-        """Load OAuth configuration from S3"""
+    def _load_auth(self):
+        """Load authentication data from S3"""
         try:
             response = self.s3_client.get_object(
                 Bucket=self.s3_bucket,
-                Key='tokens/youtube_oauth.json'
+                Key='tokens/youtube_auth.json'
             )
-            oauth_data = json.loads(response['Body'].read())
-            return oauth_data
+            auth_data = json.loads(response['Body'].read())
+            return auth_data
         except self.s3_client.exceptions.NoSuchKey:
-            print(f"❌ No OAuth config found in S3. Please run 'songbird auth youtube' first")
+            print(f"❌ No auth data found in S3. Please run 'songbird auth youtube' first")
             return None
         except Exception as e:
-            print(f"❌ Failed to load OAuth config from S3: {e}")
+            print(f"❌ Failed to load auth data from S3: {e}")
             return None
 
     def is_authenticated(self):
@@ -248,72 +340,42 @@ class YouTubeAuth:
 
     def get_token_info(self, debug=False):
         """
-        Get information about current OAuth status
+        Get information about current authentication status
 
         Args:
             debug: If True, include detailed error information
 
         Returns:
-            Dict with OAuth status information
+            Dict with authentication status information
         """
-        oauth_data = self._load_oauth()
+        auth_data = self._load_auth()
 
-        if not oauth_data:
+        if not auth_data:
             return {
                 'exists': False,
                 'valid': False,
-                'message': 'No OAuth config found in S3'
+                'message': 'No authentication data found in S3'
             }
 
         try:
-            created_at = oauth_data.get('created_at', 0)
+            created_at = auth_data.get('created_at', 0)
 
-            # Validate token structure (no API call needed)
-            config = oauth_data.get('oauth_config', {})
-            token_data = config.get('token', {})
+            # Check if auth data has required fields
+            headers = auth_data.get('auth_data', {})
+            has_cookie = 'cookie' in headers
 
-            has_required_fields = all([
-                config.get('client_id'),
-                config.get('client_secret'),
-                token_data.get('access_token'),
-                token_data.get('refresh_token')
-            ])
-
-            # Check if token structure is valid
-            # ytmusicapi's RefreshingToken will handle token refresh automatically
             result = {
                 'exists': True,
-                'valid': has_required_fields,
+                'valid': has_cookie,
                 'created_at': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(created_at)),
-                'message': 'OAuth configured - ytmusicapi handles token refresh automatically'
+                'message': 'Browser authentication configured'
             }
-
-            # Add token expiry information if available
-            if 'expires_at' in token_data:
-                expires_at = token_data['expires_at']
-                current_time = time.time()
-                is_expired = current_time >= expires_at
-
-                result['expires_at'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(expires_at))
-                result['is_expired'] = is_expired
-
-                if is_expired:
-                    result['message'] = 'OAuth token expired but will auto-refresh on first use'
-                else:
-                    time_remaining = expires_at - current_time
-                    result['time_remaining_minutes'] = time_remaining / 60
 
             if debug:
                 result['debug_info'] = {
-                    'has_oauth_config': 'oauth_config' in oauth_data,
-                    'has_token': 'token' in config,
-                    'has_client_id': bool(config.get('client_id')),
-                    'has_client_secret': bool(config.get('client_secret')),
-                    'has_access_token': bool(token_data.get('access_token')),
-                    'has_refresh_token': bool(token_data.get('refresh_token')),
-                    'token_keys': list(token_data.keys()) if token_data else [],
-                    'config_keys': list(config.keys()) if config else [],
-                    'oauth_data_keys': list(oauth_data.keys())
+                    'has_cookie': has_cookie,
+                    'has_authorization': 'authorization' in headers,
+                    'header_keys': list(headers.keys()) if headers else []
                 }
 
             return result
@@ -324,19 +386,18 @@ class YouTubeAuth:
                 'valid': False,
                 'error': str(e),
                 'error_type': type(e).__name__,
-                'message': 'Error reading OAuth data'
+                'message': 'Error reading authentication data'
             }
             if debug:
                 import traceback
                 result['debug_info'] = {
-                    'traceback': traceback.format_exc(),
-                    'oauth_data_keys': list(oauth_data.keys()) if oauth_data else None
+                    'traceback': traceback.format_exc()
                 }
             return result
 
     def display_token_info(self, debug=False):
         """
-        Display token information to the console
+        Display authentication information to the console
 
         Args:
             debug: If True, show detailed debugging information
@@ -344,7 +405,7 @@ class YouTubeAuth:
         youtube_info = self.get_token_info(debug=debug)
 
         if not youtube_info.get('exists'):
-            print("  Status: No token found")
+            print("  Status: No authentication found")
             print("  Run 'songbird auth youtube' to authenticate")
         elif not youtube_info.get('valid'):
             print(f"  Status: Invalid")
@@ -357,30 +418,24 @@ class YouTubeAuth:
                 print("\n  Debug Info:")
                 print(json.dumps(youtube_info['debug_info'], indent=4))
         else:
-            # Token exists and is valid
-            is_expired = youtube_info.get('is_expired', False)
-            print(f"  Status: {'Ready (token will auto-refresh)' if is_expired else 'Active'}")
+            print(f"  Status: Active (Browser cookies)")
             print(f"  Message: {youtube_info.get('message', 'Active')}")
             print(f"  Created at: {youtube_info.get('created_at', 'Unknown')}")
-
-            if 'expires_at' in youtube_info:
-                print(f"  Expires at: {youtube_info['expires_at']}")
-
-            if not is_expired and 'time_remaining_minutes' in youtube_info:
-                print(f"  Time remaining: {youtube_info['time_remaining_minutes']:.1f} minutes")
+            print(f"  Note: Cookies typically expire after ~1 year")
 
             if debug and 'debug_info' in youtube_info:
                 print("\n  Debug Info:")
                 print(json.dumps(youtube_info['debug_info'], indent=4))
 
+
 if __name__ == "__main__":
     try:
-        debugging = YouTubeAuth()
-        output = debugging.get_token_info()  # Added parentheses to call the method
+        auth = YouTubeAuth()
+        output = auth.get_token_info()
 
-        print("\n=== YouTube Auth Token Info ===")
+        print("\n=== YouTube Auth Info ===")
         print(json.dumps(output, indent=2))
-        print("================================\n")
+        print("=========================\n")
     except Exception as e:
         print(f"\n❌ Error during debugging: {e}")
         import traceback
