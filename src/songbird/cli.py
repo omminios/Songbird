@@ -119,7 +119,8 @@ def pair():
 
 @cli.command()
 @click.option('--verbose', '-v', is_flag=True, help='Show detailed sync progress')
-def sync(verbose):
+@click.option('--force', '-f', is_flag=True, help='Force sync even if playlists appear unchanged')
+def sync(verbose, force):
     """Manually trigger playlist synchronization"""
     click.echo("🔄 Starting manual sync...")
 
@@ -129,7 +130,7 @@ def sync(verbose):
         return
 
     sync_manager = SyncManager()
-    if sync_manager.manual_sync(verbose=verbose):
+    if sync_manager.manual_sync(verbose=verbose, force=force):
         click.echo("✅ Sync completed successfully!")
     else:
         click.echo("❌ Sync failed. Check logs for details.")

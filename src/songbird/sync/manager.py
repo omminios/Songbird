@@ -21,7 +21,7 @@ class SyncManager:
         self.youtube_manager = YouTubePlaylistManager()
         self.song_matcher = SongMatcher()
 
-    def manual_sync(self, verbose: bool = False) -> bool:
+    def manual_sync(self, verbose: bool = False, force: bool = False) -> bool:
         """
         Trigger manual sync via AWS Lambda or local execution
         Returns True if sync was successful
@@ -34,24 +34,33 @@ class SyncManager:
         try:
             # For now, run sync locally
             # TODO: Replace with AWS Lambda invocation
-            return self._run_local_sync(verbose=verbose)
+            return self._run_local_sync(verbose=verbose, force=force)
 
         except Exception as e:
             self.config_manager.log_error('manual_sync', str(e))
             print(f"Manual sync failed: {e}")
             return False
 
-    def _run_local_sync(self, verbose: bool = False) -> bool:
+    def _run_local_sync(self, verbose: bool = False, force: bool = False) -> bool:
         """Run synchronization locally (for testing/development)"""
         print("🔄 Starting local sync...")
 
         pairs = self.config_manager.get_playlist_pairs()
         all_success = True
+        skipped_count = 0
 
         for pair in pairs:
             print(f"\n📋 Syncing: {pair['spotify']['name']} ↔ {pair['youtube']['name']}")
 
             try:
+                # Quick change detection if not forced
+                if not force:
+                    needs_sync = self._check_if_sync_needed(pair, verbose=verbose)
+                    if not needs_sync:
+                        print(f"  ⏩ Skipped (no changes detected)")
+                        skipped_count += 1
+                        continue
+
                 success = self._sync_playlist_pair(pair, verbose=verbose)
                 if success:
                     self.config_manager.update_sync_status(
@@ -77,7 +86,54 @@ class SyncManager:
                 )
                 print(f"❌ Error syncing pair {pair['id']}: {e}")
 
+        if skipped_count > 0:
+            print(f"\n⏩ Skipped {skipped_count} playlist(s) with no changes")
+
         return all_success
+
+    def _check_if_sync_needed(self, pair: Dict, verbose: bool = False) -> bool:
+        """
+        Quick check to see if sync is needed by comparing track counts
+        Returns True if sync is needed, False if playlists appear unchanged
+        """
+        try:
+            # Get current track counts (fast - doesn't fetch full track lists)
+            spotify_tracks = self.spotify_manager.get_playlist_tracks(pair['spotify']['id'])
+            youtube_tracks = self.youtube_manager.get_playlist_tracks(pair['youtube']['id'])
+
+            current_spotify_count = len(spotify_tracks)
+            current_youtube_count = len(youtube_tracks)
+
+            # Get cached snapshot
+            snapshot = self.config_manager.get_playlist_snapshot(pair['id'])
+
+            if not snapshot:
+                # No snapshot yet, sync needed
+                if verbose:
+                    print(f"  ℹ️  No previous snapshot found")
+                return True
+
+            # Compare track counts
+            prev_spotify = snapshot.get('spotify_count', 0)
+            prev_youtube = snapshot.get('youtube_count', 0)
+
+            if current_spotify_count != prev_spotify or current_youtube_count != prev_youtube:
+                if verbose:
+                    print(f"  ℹ️  Changes detected:")
+                    if current_spotify_count != prev_spotify:
+                        print(f"    Spotify: {prev_spotify} → {current_spotify_count} tracks")
+                    if current_youtube_count != prev_youtube:
+                        print(f"    YouTube: {prev_youtube} → {current_youtube_count} tracks")
+                return True
+
+            # Counts match, likely no changes
+            return False
+
+        except Exception as e:
+            # If check fails, assume sync is needed
+            if verbose:
+                print(f"  ⚠️  Change detection failed: {e}")
+            return True
 
     def _sync_playlist_pair(self, pair: Dict, verbose: bool = False) -> bool:
         """
@@ -96,7 +152,22 @@ class SyncManager:
             sync_plan = self._create_sync_plan(spotify_tracks, youtube_tracks, verbose=verbose)
 
             # Execute sync plan
-            return self._execute_sync_plan(pair, sync_plan)
+            success = self._execute_sync_plan(pair, sync_plan)
+
+            # Update snapshot after sync (even if partial success)
+            # This prevents re-syncing the same tracks on next run
+            if success:
+                # Refetch counts after sync to get accurate snapshot
+                final_spotify = self._get_spotify_tracks(pair['spotify']['id'])
+                final_youtube = self._get_youtube_tracks(pair['youtube']['id'])
+
+                self.config_manager.update_playlist_snapshot(
+                    pair['id'],
+                    len(final_spotify),
+                    len(final_youtube)
+                )
+
+            return success
 
         except Exception as e:
             print(f"  Error in sync: {e}")

@@ -148,6 +148,36 @@ class ConfigManager:
         config['sync_settings']['last_sync'] = datetime.now(timezone.utc).isoformat()
         self.save_config(config)
 
+    def get_playlist_snapshot(self, pair_id: int) -> Dict:
+        """Get cached playlist snapshot for change detection"""
+        config = self.load_config()
+        pairs = config.get('playlist_pairs', [])
+
+        for pair in pairs:
+            if pair.get('id') == pair_id:
+                return pair.get('snapshot', {})
+
+        return {}
+
+    def update_playlist_snapshot(self, pair_id: int, spotify_count: int, youtube_count: int,
+                                 spotify_snapshot_id: str = None, youtube_snapshot_id: str = None):
+        """Update playlist snapshot for change detection"""
+        config = self.load_config()
+        pairs = config.get('playlist_pairs', [])
+
+        for pair in pairs:
+            if pair.get('id') == pair_id:
+                pair['snapshot'] = {
+                    'spotify_count': spotify_count,
+                    'youtube_count': youtube_count,
+                    'spotify_snapshot_id': spotify_snapshot_id,
+                    'youtube_snapshot_id': youtube_snapshot_id,
+                    'updated_at': datetime.now(timezone.utc).isoformat()
+                }
+                break
+
+        self.save_config(config)
+
     def get_sync_status(self) -> Optional[Dict]:
         """Get overall sync status information"""
         config = self.load_config()
