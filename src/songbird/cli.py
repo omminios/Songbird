@@ -118,7 +118,8 @@ def pair():
 
 
 @cli.command()
-def sync():
+@click.option('--verbose', '-v', is_flag=True, help='Show detailed sync progress')
+def sync(verbose):
     """Manually trigger playlist synchronization"""
     click.echo("🔄 Starting manual sync...")
 
@@ -128,7 +129,7 @@ def sync():
         return
 
     sync_manager = SyncManager()
-    if sync_manager.manual_sync():
+    if sync_manager.manual_sync(verbose=verbose):
         click.echo("✅ Sync completed successfully!")
     else:
         click.echo("❌ Sync failed. Check logs for details.")
@@ -163,6 +164,34 @@ def clear_errors():
     config = ConfigManager()
     config.clear_errors()
     click.echo("✅ Error logs cleared successfully!")
+
+
+@cli.command()
+@click.confirmation_option(prompt='⚠️  This will remove ALL playlist pairs and sync history. Are you sure?')
+def reset():
+    """Reset all configuration (pairs, history, errors)"""
+    click.echo("\n🔄 Resetting configuration...")
+    click.echo("=" * 70)
+
+    config = ConfigManager()
+
+    # Show what will be reset
+    pairs = config.get_playlist_pairs()
+    errors = config.get_errors(limit=1000)
+
+    click.echo(f"\nCurrent configuration:")
+    click.echo(f"  - Playlist pairs: {len(pairs)}")
+    click.echo(f"  - Error logs: {len(errors)}")
+
+    # Perform reset
+    config.reset_all()
+
+    click.echo("\n" + "=" * 70)
+    click.echo("✅ Reset complete!")
+    click.echo("\n⚠️  Note: This does NOT remove authentication tokens.")
+    click.echo("   To re-authenticate, run:")
+    click.echo("     songbird auth spotify")
+    click.echo("     songbird auth youtube")
 
 
 if __name__ == '__main__':

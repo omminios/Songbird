@@ -195,3 +195,12 @@ class ConfigManager:
         config = self.load_config()
         config['error_log'] = []
         self.save_config(config)
+
+    def reset_all(self):
+        """Reset all configuration to defaults"""
+        default_config = self._get_default_config()
+        self.save_config(default_config)
+        print("✅ Configuration reset to defaults")
+        print("   - All playlist pairs removed")
+        print("   - Sync history cleared")
+        print("   - Error logs cleared")

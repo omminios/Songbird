@@ -40,7 +40,7 @@ class SongMatcher:
 
         return best_match
 
-    def batch_match_songs(self, source_tracks: List[Dict], target_service: str) -> Dict:
+    def batch_match_songs(self, source_tracks: List[Dict], target_service: str, verbose: bool = False) -> Dict:
         """
         Match a batch of songs and return results
 
@@ -57,15 +57,25 @@ class SongMatcher:
             'errors': []
         }
 
-        for track in source_tracks:
+        total = len(source_tracks)
+        for idx, track in enumerate(source_tracks, 1):
+            if verbose:
+                print(f"    [{idx}/{total}] Searching for: {track['name']} - {track['artist']}")
+
             try:
                 match = self.find_matching_song(track, target_service)
                 if match:
                     results['matched'].append((track, match))
+                    if verbose:
+                        print(f"      ✅ Found: {match['name']}")
                 else:
                     results['unmatched'].append(track)
+                    if verbose:
+                        print(f"      ❌ No match found")
             except Exception as e:
                 results['errors'].append({'track': track, 'error': str(e)})
+                if verbose:
+                    print(f"      ⚠️  Error: {e}")
 
         return results
 

@@ -21,7 +21,7 @@ class SyncManager:
         self.youtube_manager = YouTubePlaylistManager()
         self.song_matcher = SongMatcher()
 
-    def manual_sync(self) -> bool:
+    def manual_sync(self, verbose: bool = False) -> bool:
         """
         Trigger manual sync via AWS Lambda or local execution
         Returns True if sync was successful
@@ -34,14 +34,14 @@ class SyncManager:
         try:
             # For now, run sync locally
             # TODO: Replace with AWS Lambda invocation
-            return self._run_local_sync()
+            return self._run_local_sync(verbose=verbose)
 
         except Exception as e:
             self.config_manager.log_error('manual_sync', str(e))
             print(f"Manual sync failed: {e}")
             return False
 
-    def _run_local_sync(self) -> bool:
+    def _run_local_sync(self, verbose: bool = False) -> bool:
         """Run synchronization locally (for testing/development)"""
         print("🔄 Starting local sync...")
 
@@ -52,7 +52,7 @@ class SyncManager:
             print(f"\n📋 Syncing: {pair['spotify']['name']} ↔ {pair['youtube']['name']}")
 
             try:
-                success = self._sync_playlist_pair(pair)
+                success = self._sync_playlist_pair(pair, verbose=verbose)
                 if success:
                     self.config_manager.update_sync_status(
                         pair['id'],
@@ -79,7 +79,7 @@ class SyncManager:
 
         return all_success
 
-    def _sync_playlist_pair(self, pair: Dict) -> bool:
+    def _sync_playlist_pair(self, pair: Dict, verbose: bool = False) -> bool:
         """
         Synchronize a single playlist pair
         Returns True if successful
@@ -93,7 +93,7 @@ class SyncManager:
             print(f"  YouTube Music: {len(youtube_tracks)} tracks")
 
             # Determine what needs to be synced
-            sync_plan = self._create_sync_plan(spotify_tracks, youtube_tracks)
+            sync_plan = self._create_sync_plan(spotify_tracks, youtube_tracks, verbose=verbose)
 
             # Execute sync plan
             return self._execute_sync_plan(pair, sync_plan)
@@ -118,32 +118,109 @@ class SyncManager:
             print(f"  YouTube Music tracks not available: {e}")
             return []
 
-    def _create_sync_plan(self, spotify_tracks: List[Dict], youtube_tracks: List[Dict]) -> Dict:
+    def _create_sync_plan(self, spotify_tracks: List[Dict], youtube_tracks: List[Dict], verbose: bool = False) -> Dict:
         """
         Create a sync plan by comparing playlists
         Returns what needs to be added/removed from each service
         """
-        # Match existing tracks
-        spotify_to_youtube = self.song_matcher.batch_match_songs(spotify_tracks, 'youtube')
-        youtube_to_spotify = self.song_matcher.batch_match_songs(youtube_tracks, 'spotify')
+        # Get track names/artists for comparison (normalized for matching)
+        def normalize_track(track):
+            return (
+                self.song_matcher._clean_string(track['name']).lower(),
+                self.song_matcher._clean_string(track['artist']).lower()
+            )
 
-        # Find tracks that need to be added
-        # Spotify tracks that don't have a match in YouTube (should be added to YouTube)
-        spotify_only = [track for track in spotify_tracks
-                       if not any(track['id'] == match[0]['id']
-                                for match in spotify_to_youtube['matched'])]
+        # Deduplicate tracks by keeping only first occurrence
+        # This prevents issues with playlists that have duplicate tracks
+        seen_spotify = set()
+        deduplicated_spotify = []
+        for track in spotify_tracks:
+            norm = normalize_track(track)
+            if norm not in seen_spotify:
+                seen_spotify.add(norm)
+                deduplicated_spotify.append(track)
 
-        # YouTube tracks that don't have a match in Spotify (should be added to Spotify)
-        youtube_only = [track for track in youtube_tracks
-                     if not any(track['id'] == match[0]['id']
-                              for match in youtube_to_spotify['matched'])]
+        seen_youtube = set()
+        deduplicated_youtube = []
+        for track in youtube_tracks:
+            norm = normalize_track(track)
+            if norm not in seen_youtube:
+                seen_youtube.add(norm)
+                deduplicated_youtube.append(track)
+
+        if verbose and (len(spotify_tracks) != len(deduplicated_spotify) or len(youtube_tracks) != len(deduplicated_youtube)):
+            print(f"\n  ℹ️  Removed duplicates:")
+            if len(spotify_tracks) != len(deduplicated_spotify):
+                print(f"    Spotify: {len(spotify_tracks)} → {len(deduplicated_spotify)} tracks")
+            if len(youtube_tracks) != len(deduplicated_youtube):
+                print(f"    YouTube: {len(youtube_tracks)} → {len(deduplicated_youtube)} tracks")
+
+        # Create sets of normalized track identifiers from deduplicated lists
+        spotify_track_set = {normalize_track(t) for t in deduplicated_spotify}
+        youtube_track_set = {normalize_track(t) for t in deduplicated_youtube}
+
+        # Find tracks that exist in one playlist but not the other
+        spotify_only_normalized = spotify_track_set - youtube_track_set
+        youtube_only_normalized = youtube_track_set - spotify_track_set
+
+        # Get the actual track objects that need to be synced (from deduplicated lists)
+        spotify_only = [t for t in deduplicated_spotify if normalize_track(t) in spotify_only_normalized]
+        youtube_only = [t for t in deduplicated_youtube if normalize_track(t) in youtube_only_normalized]
+
+        if verbose:
+            print(f"\n  📊 Sync Plan:")
+            print(f"    Tracks only in Spotify: {len(spotify_only)}")
+            print(f"    Tracks only in YouTube: {len(youtube_only)}")
+            print(f"    Tracks in both: {len(spotify_track_set & youtube_track_set)}")
+
+            if youtube_only:
+                print(f"\n  📋 YouTube tracks to add to Spotify:")
+                for track in youtube_only[:5]:  # Show first 5
+                    print(f"    - {track['name']} by {track['artist']}")
+                if len(youtube_only) > 5:
+                    print(f"    ... and {len(youtube_only) - 5} more")
+
+            if spotify_only:
+                print(f"\n  📋 Spotify tracks to add to YouTube:")
+                for track in spotify_only[:5]:  # Show first 5
+                    print(f"    - {track['name']} by {track['artist']}")
+                if len(spotify_only) > 5:
+                    print(f"    ... and {len(spotify_only) - 5} more")
+
+        # Match the tracks that need to be synced
+        spotify_to_youtube_matches = []
+        youtube_to_spotify_matches = []
+        unmatched_spotify = []
+        unmatched_youtube = []
+
+        # Match Spotify-only tracks to YouTube
+        if spotify_only:
+            if verbose:
+                print(f"\n  🔍 Finding YouTube versions of Spotify tracks...")
+            for track in spotify_only:
+                match = self.song_matcher.find_matching_song(track, 'youtube')
+                if match:
+                    spotify_to_youtube_matches.append((track, match))
+                else:
+                    unmatched_spotify.append(track)
+
+        # Match YouTube-only tracks to Spotify
+        if youtube_only:
+            if verbose:
+                print(f"\n  🔍 Finding Spotify versions of YouTube tracks...")
+            for track in youtube_only:
+                match = self.song_matcher.find_matching_song(track, 'spotify')
+                if match:
+                    youtube_to_spotify_matches.append((track, match))
+                else:
+                    unmatched_youtube.append(track)
 
         return {
             'add_to_spotify': youtube_only,
             'add_to_youtube': spotify_only,
-            'matched_tracks': spotify_to_youtube['matched'],
-            'unmatched_spotify': spotify_to_youtube['unmatched'],
-            'unmatched_youtube': youtube_to_spotify['unmatched']
+            'matched_tracks': spotify_to_youtube_matches,
+            'unmatched_spotify': unmatched_spotify,
+            'unmatched_youtube': unmatched_youtube
         }
 
     def _execute_sync_plan(self, pair: Dict, sync_plan: Dict) -> bool:
