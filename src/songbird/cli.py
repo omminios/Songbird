@@ -167,6 +167,14 @@ def clear_errors():
     click.echo("✅ Error logs cleared successfully!")
 
 
+@cli.command(name='clear-snapshots')
+def clear_snapshots():
+    """Clear playlist snapshots to force re-sync"""
+    config = ConfigManager()
+    config.clear_snapshots()
+    click.echo("✅ Snapshots cleared! Next sync will check all playlists.")
+
+
 @cli.command()
 @click.confirmation_option(prompt='⚠️  This will remove ALL playlist pairs and sync history. Are you sure?')
 def reset():

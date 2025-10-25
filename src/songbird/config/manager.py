@@ -226,6 +226,18 @@ class ConfigManager:
         config['error_log'] = []
         self.save_config(config)
 
+    def clear_snapshots(self):
+        """Clear all playlist snapshots (force re-sync on next run)"""
+        config = self.load_config()
+        pairs = config.get('playlist_pairs', [])
+
+        for pair in pairs:
+            if 'snapshot' in pair:
+                del pair['snapshot']
+
+        self.save_config(config)
+        print("✅ Cleared snapshots for all playlist pairs")
+
     def reset_all(self):
         """Reset all configuration to defaults"""
         default_config = self._get_default_config()

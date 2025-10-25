@@ -264,27 +264,64 @@ class SyncManager:
         unmatched_spotify = []
         unmatched_youtube = []
 
+        # Decide whether to use parallel matching based on number of tracks
+        use_parallel = len(spotify_only) > 5 or len(youtube_only) > 5
+
         # Match Spotify-only tracks to YouTube
         if spotify_only:
             if verbose:
-                print(f"\n  🔍 Finding YouTube versions of Spotify tracks...")
-            for track in spotify_only:
-                match = self.song_matcher.find_matching_song(track, 'youtube')
-                if match:
-                    spotify_to_youtube_matches.append((track, match))
-                else:
-                    unmatched_spotify.append(track)
+                mode = "parallel" if use_parallel and len(spotify_only) > 5 else "sequential"
+                print(f"\n  🔍 Finding YouTube versions of Spotify tracks ({mode})...")
+
+            if use_parallel and len(spotify_only) > 5:
+                # Use parallel matching for better performance
+                results = self.song_matcher.batch_match_songs_parallel(
+                    spotify_only, 'youtube', max_workers=5, verbose=verbose
+                )
+                spotify_to_youtube_matches = results['matched']
+                unmatched_spotify = results['unmatched']
+            else:
+                # Use sequential matching for small batches
+                for track in spotify_only:
+                    if verbose:
+                        print(f"    Searching: {track['name']} - {track['artist']}")
+                    match = self.song_matcher.find_matching_song(track, 'youtube')
+                    if match:
+                        spotify_to_youtube_matches.append((track, match))
+                        if verbose:
+                            print(f"      ✅ Found: {match['name']}")
+                    else:
+                        unmatched_spotify.append(track)
+                        if verbose:
+                            print(f"      ❌ No match")
 
         # Match YouTube-only tracks to Spotify
         if youtube_only:
             if verbose:
-                print(f"\n  🔍 Finding Spotify versions of YouTube tracks...")
-            for track in youtube_only:
-                match = self.song_matcher.find_matching_song(track, 'spotify')
-                if match:
-                    youtube_to_spotify_matches.append((track, match))
-                else:
-                    unmatched_youtube.append(track)
+                mode = "parallel" if use_parallel and len(youtube_only) > 5 else "sequential"
+                print(f"\n  🔍 Finding Spotify versions of YouTube tracks ({mode})...")
+
+            if use_parallel and len(youtube_only) > 5:
+                # Use parallel matching for better performance
+                results = self.song_matcher.batch_match_songs_parallel(
+                    youtube_only, 'spotify', max_workers=5, verbose=verbose
+                )
+                youtube_to_spotify_matches = results['matched']
+                unmatched_youtube = results['unmatched']
+            else:
+                # Use sequential matching for small batches
+                for track in youtube_only:
+                    if verbose:
+                        print(f"    Searching: {track['name']} - {track['artist']}")
+                    match = self.song_matcher.find_matching_song(track, 'spotify')
+                    if match:
+                        youtube_to_spotify_matches.append((track, match))
+                        if verbose:
+                            print(f"      ✅ Found: {match['name']}")
+                    else:
+                        unmatched_youtube.append(track)
+                        if verbose:
+                            print(f"      ❌ No match")
 
         return {
             'add_to_spotify': youtube_only,
@@ -322,20 +359,33 @@ class SyncManager:
     def _add_tracks_to_spotify(self, playlist_id: str, tracks: List[Dict]) -> bool:
         """Add tracks to Spotify playlist"""
         try:
+            # Get existing tracks to prevent duplicates
+            existing_tracks = self.spotify_manager.get_playlist_tracks(playlist_id)
+            existing_uris = {track['uri'] for track in existing_tracks}
+
             # Find Spotify equivalents for the tracks
             spotify_uris = []
             unmatched_count = 0
+            already_exists_count = 0
 
             for track in tracks:
                 match = self.song_matcher.find_matching_song(track, 'spotify')
                 if match:
-                    spotify_uris.append(match['uri'])
+                    # Check if track already exists in playlist
+                    if match['uri'] in existing_uris:
+                        already_exists_count += 1
+                    else:
+                        spotify_uris.append(match['uri'])
+                        existing_uris.add(match['uri'])  # Track it to avoid duplicates within this batch
                 else:
                     unmatched_count += 1
 
             if spotify_uris:
                 self.spotify_manager.add_tracks_to_playlist(playlist_id, spotify_uris)
                 print(f"    ✅ Added {len(spotify_uris)} tracks to Spotify")
+
+            if already_exists_count > 0:
+                print(f"    ℹ️  Skipped {already_exists_count} tracks (already in playlist)")
 
             if unmatched_count > 0:
                 print(f"    ⚠️  Could not find Spotify matches for {unmatched_count} tracks")
@@ -352,20 +402,33 @@ class SyncManager:
     def _add_tracks_to_youtube(self, playlist_id: str, tracks: List[Dict]) -> bool:
         """Add tracks to YouTube Music playlist"""
         try:
+            # Get existing tracks to prevent duplicates
+            existing_tracks = self.youtube_manager.get_playlist_tracks(playlist_id)
+            existing_ids = {track['id'] for track in existing_tracks}
+
             # Find YouTube equivalents for the tracks
             youtube_ids = []
             unmatched_count = 0
+            already_exists_count = 0
 
             for track in tracks:
                 match = self.song_matcher.find_matching_song(track, 'youtube')
                 if match:
-                    youtube_ids.append(match['id'])
+                    # Check if track already exists in playlist
+                    if match['id'] in existing_ids:
+                        already_exists_count += 1
+                    else:
+                        youtube_ids.append(match['id'])
+                        existing_ids.add(match['id'])  # Track it to avoid duplicates within this batch
                 else:
                     unmatched_count += 1
 
             if youtube_ids:
                 self.youtube_manager.add_tracks_to_playlist(playlist_id, youtube_ids)
                 print(f"    ✅ Added {len(youtube_ids)} tracks to YouTube Music")
+
+            if already_exists_count > 0:
+                print(f"    ℹ️  Skipped {already_exists_count} tracks (already in playlist)")
 
             if unmatched_count > 0:
                 print(f"    ⚠️  Could not find YouTube Music matches for {unmatched_count} tracks")

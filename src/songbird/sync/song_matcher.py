@@ -3,8 +3,11 @@ Song matching logic between Spotify and YouTube Music
 Handles finding equivalent tracks across services with fuzzy matching
 """
 import re
+import time
 from typing import List, Dict, Optional, Tuple
 from difflib import SequenceMatcher
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
 from songbird.sync.playlist_manager import SpotifyPlaylistManager, YouTubePlaylistManager
 
 
@@ -14,6 +17,8 @@ class SongMatcher:
     def __init__(self):
         self.spotify_manager = SpotifyPlaylistManager()
         self.youtube_manager = YouTubePlaylistManager()
+        # Rate limiting: Track recent request times
+        self.request_times = deque(maxlen=10)  # Track last 10 requests
 
     def find_matching_song(self, source_track: Dict, target_service: str) -> Optional[Dict]:
         """
@@ -76,6 +81,93 @@ class SongMatcher:
                 results['errors'].append({'track': track, 'error': str(e)})
                 if verbose:
                     print(f"      ⚠️  Error: {e}")
+
+        return results
+
+    def batch_match_songs_parallel(self, source_tracks: List[Dict], target_service: str,
+                                   max_workers: int = 5, verbose: bool = False) -> Dict:
+        """
+        Match a batch of songs in parallel with rate limiting
+
+        Args:
+            source_tracks: List of tracks to match
+            target_service: 'spotify' or 'youtube'
+            max_workers: Number of parallel workers (default 5)
+            verbose: Show progress
+
+        Returns:
+            {
+                'matched': [(source_track, target_track), ...],
+                'unmatched': [source_track, ...],
+                'errors': [{'track': source_track, 'error': str}, ...]
+            }
+        """
+        results = {
+            'matched': [],
+            'unmatched': [],
+            'errors': []
+        }
+
+        if not source_tracks:
+            return results
+
+        # Determine rate limit based on service
+        # Spotify: ~3 requests/sec is safe, YouTube: ~1-2 requests/sec
+        requests_per_second = 2 if target_service == 'youtube' else 3
+
+        total = len(source_tracks)
+        completed = 0
+
+        def search_with_rate_limit(track_data):
+            """Search for a single track with rate limiting"""
+            idx, track = track_data
+
+            # Rate limiting: ensure we don't exceed requests per second
+            current_time = time.time()
+
+            # Check if we need to wait
+            if len(self.request_times) == self.request_times.maxlen:
+                oldest_request = self.request_times[0]
+                time_window = current_time - oldest_request
+                if time_window < 1.0:  # Within 1 second
+                    wait_time = 1.0 - time_window
+                    time.sleep(wait_time)
+
+            # Record this request
+            self.request_times.append(time.time())
+
+            try:
+                match = self.find_matching_song(track, target_service)
+                return (idx, track, match, None)
+            except Exception as e:
+                return (idx, track, None, str(e))
+
+        # Use ThreadPoolExecutor for parallel processing
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            futures = {executor.submit(search_with_rate_limit, (i, track)): track
+                      for i, track in enumerate(source_tracks)}
+
+            # Process results as they complete
+            for future in as_completed(futures):
+                idx, track, match, error = future.result()
+                completed += 1
+
+                if verbose:
+                    print(f"    [{completed}/{total}] {track['name']} - {track['artist']}")
+
+                if error:
+                    results['errors'].append({'track': track, 'error': error})
+                    if verbose:
+                        print(f"      ⚠️  Error: {error}")
+                elif match:
+                    results['matched'].append((track, match))
+                    if verbose:
+                        print(f"      ✅ Found: {match['name']}")
+                else:
+                    results['unmatched'].append(track)
+                    if verbose:
+                        print(f"      ❌ No match")
 
         return results
 
