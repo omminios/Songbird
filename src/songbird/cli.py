@@ -120,9 +120,13 @@ def pair():
 @cli.command()
 @click.option('--verbose', '-v', is_flag=True, help='Show detailed sync progress')
 @click.option('--force', '-f', is_flag=True, help='Force sync even if playlists appear unchanged')
-def sync(verbose, force):
+@click.option('--dry-run', '-d', is_flag=True, help='Preview changes without actually syncing')
+def sync(verbose, force, dry_run):
     """Manually trigger playlist synchronization"""
-    click.echo("🔄 Starting manual sync...")
+    if dry_run:
+        click.echo("🔍 Dry run mode - previewing changes without syncing...")
+    else:
+        click.echo("🔄 Starting manual sync...")
 
     config = ConfigManager()
     if not config.has_playlist_pairs():
@@ -130,8 +134,12 @@ def sync(verbose, force):
         return
 
     sync_manager = SyncManager()
-    if sync_manager.manual_sync(verbose=verbose, force=force):
-        click.echo("✅ Sync completed successfully!")
+    if sync_manager.manual_sync(verbose=verbose, force=force, dry_run=dry_run):
+        if dry_run:
+            click.echo("\n✅ Dry run complete! No changes were made.")
+            click.echo("   Run 'songbird sync' to apply these changes.")
+        else:
+            click.echo("✅ Sync completed successfully!")
     else:
         click.echo("❌ Sync failed. Check logs for details.")
 
@@ -156,6 +164,45 @@ def status():
         pairing.show_current_pairs()
     else:
         click.echo("  No sync history found")
+
+
+@cli.command()
+@click.argument('pair_id', type=int)
+@click.confirmation_option(prompt='Are you sure you want to unpair this playlist?')
+def unpair(pair_id):
+    """Remove a specific playlist pair by ID"""
+    config = ConfigManager()
+
+    # Get current pairs to show what we're removing
+    pairs = config.get_playlist_pairs()
+    pair_to_remove = None
+
+    for pair in pairs:
+        if pair.get('id') == pair_id:
+            pair_to_remove = pair
+            break
+
+    if not pair_to_remove:
+        click.echo(f"❌ No playlist pair found with ID {pair_id}")
+        click.echo("\nRun 'songbird status' to see available pairs")
+        return
+
+    # Show what we're removing
+    click.echo(f"\n🔗 Removing pair #{pair_id}:")
+    click.echo(f"  Spotify:  {pair_to_remove['spotify']['name']}")
+    click.echo(f"  YouTube:  {pair_to_remove['youtube']['name']}")
+
+    # Remove the pair
+    config.remove_playlist_pair(pair_id)
+
+    click.echo(f"\n✅ Playlist pair #{pair_id} removed successfully!")
+
+    # Show remaining pairs
+    remaining_pairs = config.get_playlist_pairs()
+    if remaining_pairs:
+        click.echo(f"\nRemaining pairs: {len(remaining_pairs)}")
+    else:
+        click.echo("\n⚠️  No playlist pairs remaining. Run 'songbird pair' to create new pairs.")
 
 
 @cli.command(name='clear-errors')

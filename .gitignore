@@ -20,10 +20,6 @@ data/*_tokens.json
 # Configuration data
 data/config.json
 
-# Internal documentation
-Songbird PRD.md
-*PRD*.md
-
 
 # ============================================================================
 # PYTHON

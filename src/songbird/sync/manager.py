@@ -21,7 +21,7 @@ class SyncManager:
         self.youtube_manager = YouTubePlaylistManager()
         self.song_matcher = SongMatcher()
 
-    def manual_sync(self, verbose: bool = False, force: bool = False) -> bool:
+    def manual_sync(self, verbose: bool = False, force: bool = False, dry_run: bool = False) -> bool:
         """
         Trigger manual sync via AWS Lambda or local execution
         Returns True if sync was successful
@@ -34,60 +34,70 @@ class SyncManager:
         try:
             # For now, run sync locally
             # TODO: Replace with AWS Lambda invocation
-            return self._run_local_sync(verbose=verbose, force=force)
+            return self._run_local_sync(verbose=verbose, force=force, dry_run=dry_run)
 
         except Exception as e:
             self.config_manager.log_error('manual_sync', str(e))
             print(f"Manual sync failed: {e}")
             return False
 
-    def _run_local_sync(self, verbose: bool = False, force: bool = False) -> bool:
+    def _run_local_sync(self, verbose: bool = False, force: bool = False, dry_run: bool = False) -> bool:
         """Run synchronization locally (for testing/development)"""
-        print("🔄 Starting local sync...")
+        if dry_run:
+            print("🔍 Analyzing playlists (dry run - no changes will be made)...")
+        else:
+            print("🔄 Starting local sync...")
 
         pairs = self.config_manager.get_playlist_pairs()
         all_success = True
         skipped_count = 0
 
         for pair in pairs:
-            print(f"\n📋 Syncing: {pair['spotify']['name']} ↔ {pair['youtube']['name']}")
+            print(f"\n📋 {'Analyzing' if dry_run else 'Syncing'}: {pair['spotify']['name']} ↔ {pair['youtube']['name']}")
 
             try:
                 # Quick change detection if not forced
                 if not force:
                     needs_sync = self._check_if_sync_needed(pair, verbose=verbose)
                     if not needs_sync:
-                        print(f"  ⏩ Skipped (no changes detected)")
+                        print(f"  ⏩ No changes detected")
                         skipped_count += 1
                         continue
 
-                success = self._sync_playlist_pair(pair, verbose=verbose)
+                success = self._sync_playlist_pair(pair, verbose=verbose, dry_run=dry_run)
                 if success:
-                    self.config_manager.update_sync_status(
-                        pair['id'],
-                        'success',
-                        {'synced_at': datetime.now(timezone.utc).isoformat()}
-                    )
-                    print(f"✅ Sync completed for pair {pair['id']}")
+                    if not dry_run:
+                        self.config_manager.update_sync_status(
+                            pair['id'],
+                            'success',
+                            {'synced_at': datetime.now(timezone.utc).isoformat()}
+                        )
+                        print(f"✅ Sync completed for pair {pair['id']}")
+                    else:
+                        print(f"✅ Analysis completed for pair {pair['id']}")
                 else:
                     all_success = False
-                    self.config_manager.update_sync_status(
-                        pair['id'],
-                        'failed'
-                    )
-                    print(f"❌ Sync failed for pair {pair['id']}")
+                    if not dry_run:
+                        self.config_manager.update_sync_status(
+                            pair['id'],
+                            'failed'
+                        )
+                        print(f"❌ Sync failed for pair {pair['id']}")
+                    else:
+                        print(f"❌ Analysis failed for pair {pair['id']}")
 
             except Exception as e:
                 all_success = False
-                self.config_manager.log_error(
-                    'pair_sync',
-                    f"Failed to sync pair {pair['id']}: {str(e)}",
-                    {'pair_id': pair['id']}
-                )
-                print(f"❌ Error syncing pair {pair['id']}: {e}")
+                if not dry_run:
+                    self.config_manager.log_error(
+                        'pair_sync',
+                        f"Failed to sync pair {pair['id']}: {str(e)}",
+                        {'pair_id': pair['id']}
+                    )
+                print(f"❌ Error {'analyzing' if dry_run else 'syncing'} pair {pair['id']}: {e}")
 
         if skipped_count > 0:
-            print(f"\n⏩ Skipped {skipped_count} playlist(s) with no changes")
+            print(f"\n⏩ {skipped_count} playlist(s) with no changes")
 
         return all_success
 
@@ -135,7 +145,7 @@ class SyncManager:
                 print(f"  ⚠️  Change detection failed: {e}")
             return True
 
-    def _sync_playlist_pair(self, pair: Dict, verbose: bool = False) -> bool:
+    def _sync_playlist_pair(self, pair: Dict, verbose: bool = False, dry_run: bool = False) -> bool:
         """
         Synchronize a single playlist pair
         Returns True if successful
@@ -151,12 +161,15 @@ class SyncManager:
             # Determine what needs to be synced
             sync_plan = self._create_sync_plan(spotify_tracks, youtube_tracks, verbose=verbose)
 
-            # Execute sync plan
-            success = self._execute_sync_plan(pair, sync_plan)
+            # Execute sync plan (or just preview in dry-run mode)
+            if dry_run:
+                success = self._preview_sync_plan(sync_plan)
+            else:
+                success = self._execute_sync_plan(pair, sync_plan)
 
             # Update snapshot after sync (even if partial success)
             # This prevents re-syncing the same tracks on next run
-            if success:
+            if success and not dry_run:
                 # Refetch counts after sync to get accurate snapshot
                 final_spotify = self._get_spotify_tracks(pair['spotify']['id'])
                 final_youtube = self._get_youtube_tracks(pair['youtube']['id'])
@@ -170,7 +183,7 @@ class SyncManager:
             return success
 
         except Exception as e:
-            print(f"  Error in sync: {e}")
+            print(f"  Error in {'analysis' if dry_run else 'sync'}: {e}")
             return False
 
     def _get_spotify_tracks(self, playlist_id: str) -> List[Dict]:
@@ -330,6 +343,57 @@ class SyncManager:
             'unmatched_spotify': unmatched_spotify,
             'unmatched_youtube': unmatched_youtube
         }
+
+    def _preview_sync_plan(self, sync_plan: Dict) -> bool:
+        """Preview the synchronization plan without making changes"""
+        print("\n  📋 Sync Plan Preview:")
+        print("  " + "=" * 60)
+
+        # Preview additions to YouTube
+        if sync_plan['add_to_youtube']:
+            print(f"\n  ➕ Would add {len(sync_plan['add_to_youtube'])} tracks to YouTube Music:")
+            for i, track in enumerate(sync_plan['add_to_youtube'][:5], 1):  # Show first 5
+                print(f"     {i}. {track['name']} - {track['artist']}")
+            if len(sync_plan['add_to_youtube']) > 5:
+                print(f"     ... and {len(sync_plan['add_to_youtube']) - 5} more")
+        else:
+            print(f"\n  ✓ No tracks to add to YouTube Music")
+
+        # Preview additions to Spotify
+        if sync_plan['add_to_spotify']:
+            print(f"\n  ➕ Would add {len(sync_plan['add_to_spotify'])} tracks to Spotify:")
+            for i, track in enumerate(sync_plan['add_to_spotify'][:5], 1):  # Show first 5
+                print(f"     {i}. {track['name']} - {track['artist']}")
+            if len(sync_plan['add_to_spotify']) > 5:
+                print(f"     ... and {len(sync_plan['add_to_spotify']) - 5} more")
+        else:
+            print(f"\n  ✓ No tracks to add to Spotify")
+
+        # Show unmatched tracks
+        if sync_plan['unmatched_spotify']:
+            print(f"\n  ⚠️  {len(sync_plan['unmatched_spotify'])} Spotify tracks couldn't be matched:")
+            for i, track in enumerate(sync_plan['unmatched_spotify'][:3], 1):  # Show first 3
+                print(f"     {i}. {track['name']} - {track['artist']}")
+            if len(sync_plan['unmatched_spotify']) > 3:
+                print(f"     ... and {len(sync_plan['unmatched_spotify']) - 3} more")
+
+        if sync_plan['unmatched_youtube']:
+            print(f"\n  ⚠️  {len(sync_plan['unmatched_youtube'])} YouTube tracks couldn't be matched:")
+            for i, track in enumerate(sync_plan['unmatched_youtube'][:3], 1):  # Show first 3
+                print(f"     {i}. {track['name']} - {track['artist']}")
+            if len(sync_plan['unmatched_youtube']) > 3:
+                print(f"     ... and {len(sync_plan['unmatched_youtube']) - 3} more")
+
+        print("\n  " + "=" * 60)
+
+        # Summary
+        total_changes = len(sync_plan['add_to_youtube']) + len(sync_plan['add_to_spotify'])
+        if total_changes == 0:
+            print("  ✓ Playlists are in sync - no changes needed")
+        else:
+            print(f"  📊 Total changes: {total_changes} tracks would be added")
+
+        return True
 
     def _execute_sync_plan(self, pair: Dict, sync_plan: Dict) -> bool:
         """Execute the synchronization plan"""
