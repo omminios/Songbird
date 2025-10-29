@@ -6,7 +6,7 @@ import boto3
 import os
 import json
 import time
-from ytmusicapi import YTMusic, setup
+from ytmusicapi import YTMusic
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,20 +25,11 @@ class YouTubeAuth:
                 "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
             )
 
-        if not boto3:
-            raise ImportError(
-                "boto3 is required for S3 storage.\n"
-                "Install with: pip install boto3"
-            )
-
         self.s3_client = boto3.client('s3')
 
-    def authenticate(self, open_browser=True):
+    def authenticate(self):
         """
         Perform browser cookie authentication for YouTube Music
-
-        Args:
-            open_browser: If True, provide instructions to open browser
 
         Returns True if successful, False otherwise
         """
@@ -95,58 +86,40 @@ class YouTubeAuth:
             print("Paste everything and press Ctrl+D (Linux/Mac) or Ctrl+Z then Enter (Windows) when done:")
             print("=" * 70)
 
-            # Use ytmusicapi's setup function to parse headers
-            # We'll capture the headers manually
-            import sys
-            from io import StringIO
+            # Read multi-line input
+            headers_input = []
+            print("\n(Paste headers and press Ctrl+D or Ctrl+Z+Enter when done)")
 
-            # Redirect stdout to capture what setup() would print
-            old_stdout = sys.stdout
-            sys.stdout = StringIO()
+            while True:
+                try:
+                    line = input()
+                    headers_input.append(line)
+                except EOFError:
+                    break
 
-            try:
-                # Read multi-line input
-                headers_input = []
-                print("\n(Paste headers and press Ctrl+D or Ctrl+Z+Enter when done)")
-                sys.stdout = old_stdout  # Restore stdout for this print
+            headers_text = '\n'.join(headers_input)
 
-                while True:
-                    try:
-                        line = input()
-                        headers_input.append(line)
-                    except EOFError:
-                        break
+            # Parse headers
+            auth_data = self._parse_headers(headers_text)
 
-                headers_text = '\n'.join(headers_input)
+            if not auth_data:
+                print("\n❌ Failed to parse headers. Please try again.")
+                return False
 
-                # Parse the headers using ytmusicapi's setup function
-                # Save to temporary file
-                temp_file = 'temp_youtube_headers.json'
+            # Test the authentication
+            print("\n🔄 Testing authentication...")
+            ytmusic = YTMusic(auth_data)
 
-                # Parse headers manually since setup() is interactive
-                auth_data = self._parse_headers(headers_text)
+            # Try a simple API call
+            ytmusic.get_library_playlists(limit=1)
+            print("✅ Authentication verified!")
 
-                if not auth_data:
-                    print("\n❌ Failed to parse headers. Please try again.")
-                    return False
+            # Save to S3
+            self._save_auth(auth_data)
 
-                # Test the authentication
-                print("\n🔄 Testing authentication...")
-                ytmusic = YTMusic(auth_data)
-
-                # Try a simple API call
-                ytmusic.get_library_playlists(limit=1)
-                print("✅ Authentication verified!")
-
-                # Save to S3
-                self._save_auth(auth_data)
-
-                print("\n✅ YouTube Music authentication successful!")
-                print("✅ Cookies saved to S3")
-                return True
-
-            finally:
-                sys.stdout = old_stdout
+            print("\n✅ YouTube Music authentication successful!")
+            print("✅ Cookies saved to S3")
+            return True
 
         except KeyboardInterrupt:
             print("\n\n❌ Authentication cancelled by user")
@@ -426,17 +399,3 @@ class YouTubeAuth:
             if debug and 'debug_info' in youtube_info:
                 print("\n  Debug Info:")
                 print(json.dumps(youtube_info['debug_info'], indent=4))
-
-
-if __name__ == "__main__":
-    try:
-        auth = YouTubeAuth()
-        output = auth.get_token_info()
-
-        print("\n=== YouTube Auth Info ===")
-        print(json.dumps(output, indent=2))
-        print("=========================\n")
-    except Exception as e:
-        print(f"\n❌ Error during debugging: {e}")
-        import traceback
-        traceback.print_exc()
