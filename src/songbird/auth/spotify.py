@@ -20,8 +20,8 @@ class CallbackHandler(BaseHTTPRequestHandler):
     """HTTP server to handle OAuth callback"""
 
     def do_GET(self):
+        # Extract authorization code from callback URL
         if self.path.startswith('/callback'):
-            # Extract authorization code from callback URL
             query = self.path.split('?', 1)[1] if '?' in self.path else ''
             params = parse_qs(query)
 
@@ -50,10 +50,6 @@ class CallbackHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def log_message(self, format, *args):
-        # Suppress server logs
-        pass
-
 
 class SpotifyAuth:
     """Handles Spotify OAuth 2.0 authentication flow"""
@@ -63,6 +59,7 @@ class SpotifyAuth:
         self.client_secret = os.getenv('SPOTIFY_CLIENT_SECRET')
         self.redirect_uri = 'http://127.0.0.1:8888/callback'
         self.scope = 'playlist-read-private playlist-modify-private playlist-modify-public'
+        self.s3_client = boto3.client('s3')
 
         # S3 configuration (always required)
         self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
@@ -70,16 +67,7 @@ class SpotifyAuth:
             raise ValueError(
                 "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
                 "Please set it to your S3 bucket name:\n"
-                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
             )
-
-        if not boto3:
-            raise ImportError(
-                "boto3 is required for S3 storage.\n"
-                "Install with: pip install boto3"
-            )
-
-        self.s3_client = boto3.client('s3')
 
         if not self.client_id or not self.client_secret:
             raise ValueError(
@@ -89,9 +77,8 @@ class SpotifyAuth:
 
     def authenticate(self):
         """
-        Perform OAuth 2.0 authentication flow
-        Runs locally with browser interaction, saves tokens directly to S3
-        Returns True if successful, False otherwise
+        Attempt to save tokens to S3.
+        We save it here instead of locally so that Lambda can authenitcate when needed
         """
         try:
             # Step 1: Get authorization code
@@ -151,15 +138,16 @@ class SpotifyAuth:
 
         return server.auth_code
 
-    def _exchange_code_for_tokens(self, auth_code):
-        """Exchange authorization code for access and refresh tokens"""
-        # Prepare token request
-        token_data = {
-            'grant_type': 'authorization_code',
-            'code': auth_code,
-            'redirect_uri': self.redirect_uri
-        }
+    def _make_token_request(self, token_data):
+        """
+        Make a token request to Spotify API (shared by auth code exchange and token refresh)
 
+        Args:
+            token_data: Dict with grant_type and required parameters
+
+        Returns:
+            Token response dict or None if failed
+        """
         # Create authorization header
         auth_string = f"{self.client_id}:{self.client_secret}"
         auth_bytes = auth_string.encode('ascii')
@@ -170,18 +158,31 @@ class SpotifyAuth:
             'Content-Type': 'application/x-www-form-urlencoded'
         }
 
-        # Make token request
-        response = requests.post(
-            'https://accounts.spotify.com/api/token',
-            data=token_data,
-            headers=headers
-        )
+        try:
+            # Make token request
+            response = requests.post(
+                'https://accounts.spotify.com/api/token',
+                data=token_data,
+                headers=headers
+            )
 
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print(f"Token exchange failed: {response.status_code} - {response.text}")
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"Token request failed: {response.status_code} - {response.text}")
+                return None
+        except Exception as e:
+            print(f'Token request error: {e}')
             return None
+
+    def _exchange_code_for_tokens(self, auth_code):
+        """Exchange authorization code for access and refresh tokens"""
+        token_data = {
+            'grant_type': 'authorization_code',
+            'code': auth_code,
+            'redirect_uri': self.redirect_uri
+        }
+        return self._make_token_request(token_data)
 
     def _save_tokens(self, tokens):
         """Save tokens to S3 with timestamp"""
@@ -189,10 +190,10 @@ class SpotifyAuth:
         token_data = {
             'access_token': tokens['access_token'],
             'refresh_token': tokens['refresh_token'],
-            'expires_in': tokens['expires_in'],  # Seconds until expiry (usually 3600)
+            'expires_in': tokens['expires_in'],
             'token_type': tokens.get('token_type', 'Bearer'),
             'scope': tokens.get('scope', self.scope),
-            'obtained_at': time.time()  # Unix timestamp when token was obtained
+            'obtained_at': time.time()
         }
 
         try:
@@ -209,16 +210,14 @@ class SpotifyAuth:
             raise
 
     def get_valid_token(self):
-        """Get a valid access token, refreshing if necessary"""
-        # Load tokens from S3
+        """ Refresh logic """
+        
         token_data = self._load_tokens()
-
         if not token_data:
             return None
 
-        # Check if token is expired
+        # Check if token is expired if token expired, refresh it
         if self._is_token_expired(token_data):
-            # Token expired, refresh it
             new_tokens = self._refresh_access_token(token_data['refresh_token'])
             if new_tokens:
                 self._save_tokens(new_tokens)
@@ -248,8 +247,8 @@ class SpotifyAuth:
 
     def _is_token_expired(self, token_data):
         """Check if access token is expired or will expire soon"""
+
         if 'obtained_at' not in token_data or 'expires_in' not in token_data:
-            # Old token format, assume expired
             return True
 
         obtained_at = token_data['obtained_at']
@@ -274,54 +273,31 @@ class SpotifyAuth:
         Returns:
             New token data or None if refresh failed
         """
-        # Prepare refresh request
         token_data = {
             'grant_type': 'refresh_token',
             'refresh_token': refresh_token
         }
 
-        # Create authorization header
-        auth_string = f"{self.client_id}:{self.client_secret}"
-        auth_bytes = auth_string.encode('ascii')
-        auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
-
-        headers = {
-            'Authorization': f'Basic {auth_b64}',
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-
         try:
-            # Make refresh request
-            response = requests.post(
-                'https://accounts.spotify.com/api/token',
-                data=token_data,
-                headers=headers
-            )
+            new_tokens = self._make_token_request(token_data)
 
-            if response.status_code == 200:
-                new_tokens = response.json()
-
+            if new_tokens:
                 # Spotify doesn't always return a new refresh token
                 # If not included, keep the old one
                 if 'refresh_token' not in new_tokens:
                     new_tokens['refresh_token'] = refresh_token
-
                 return new_tokens
-            else:
-                print(f"Token refresh failed: {response.status_code} - {response.text}")
-                return None
+
+            return None
 
         except Exception as e:
             print(f"Token refresh error: {e}")
             return None
 
 
-    def get_token_info(self, debug=False):
+    def get_token_info(self):
         """
         Get information about current token status
-
-        Args:
-            debug: If True, include detailed error information
 
         Returns:
             Dict with token status information
@@ -337,18 +313,11 @@ class SpotifyAuth:
 
         try:
             if 'obtained_at' not in token_data or 'expires_in' not in token_data:
-                result = {
+                return {
                     'exists': True,
                     'valid': False,
                     'message': 'Old token format - please re-authenticate'
                 }
-                if debug:
-                    result['debug_info'] = {
-                        'has_obtained_at': 'obtained_at' in token_data,
-                        'has_expires_in': 'expires_in' in token_data,
-                        'token_keys': list(token_data.keys())
-                    }
-                return result
 
             obtained_at = token_data['obtained_at']
             expires_in = token_data['expires_in']
@@ -380,47 +349,24 @@ class SpotifyAuth:
             else:
                 result['message'] = 'Token is active'
 
-            if debug:
-                result['debug_info'] = {
-                    'current_time': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(current_time)),
-                    'is_expired': is_expired,
-                    'buffer_seconds': 300,
-                    'raw_obtained_at': obtained_at,
-                    'raw_expires_in': expires_in
-                }
-
             return result
 
         except Exception as e:
-            result = {
+            return {
                 'exists': True,
                 'valid': False,
                 'error': str(e),
                 'error_type': type(e).__name__,
                 'message': 'Error reading token data'
             }
-            if debug:
-                import traceback
-                result['debug_info'] = {
-                    'traceback': traceback.format_exc(),
-                    'token_data_keys': list(token_data.keys()) if token_data else None
-                }
-            return result
 
     def is_authenticated(self):
         """Check if user is authenticated"""
         return self.get_valid_token() is not None
 
-    def display_token_info(self, debug=False):
-        """
-        Display token information to the console
-
-        Args:
-            debug: If True, show detailed debugging information
-        """
-        import json
-
-        spotify_info = self.get_token_info(debug=debug)
+    def display_token_info(self):
+        """Display token information to the console"""
+        spotify_info = self.get_token_info()
 
         if not spotify_info.get('exists'):
             print("  Status: No token found")
@@ -432,9 +378,6 @@ class SpotifyAuth:
                 print(f"  Error: {spotify_info['error']}")
             if 'error_type' in spotify_info:
                 print(f"  Error type: {spotify_info['error_type']}")
-            if debug and 'debug_info' in spotify_info:
-                print("\n  Debug Info:")
-                print(json.dumps(spotify_info['debug_info'], indent=4))
         else:
             # Token exists and is valid
             is_expired = spotify_info.get('is_expired', False)
@@ -447,7 +390,3 @@ class SpotifyAuth:
                 print(f"  Time remaining: {spotify_info.get('time_remaining_minutes', 0):.1f} minutes")
 
             print(f"  Has refresh token: {'Yes' if spotify_info.get('has_refresh_token') else 'No'}")
-
-            if debug and 'debug_info' in spotify_info:
-                print("\n  Debug Info:")
-                print(json.dumps(spotify_info['debug_info'], indent=4))

@@ -44,13 +44,10 @@ def youtube():
 
 
 @auth.command(name='token-info')
-@click.option('--debug', is_flag=True, help='Show detailed debugging information')
-def token_info(debug):
+def token_info():
     """Show token status for Spotify and YouTube Music"""
     click.echo("\n" + "=" * 70)
     click.echo("Authentication Token Information")
-    if debug:
-        click.echo("DEBUG MODE ENABLED")
     click.echo("=" * 70)
 
     # Spotify Token Info
@@ -58,26 +55,18 @@ def token_info(debug):
     click.echo("-" * 70)
     try:
         spotify_auth = SPA()
-        spotify_auth.display_token_info(debug=debug)
+        spotify_auth.display_token_info()
     except Exception as e:
         click.echo(f"  Error retrieving Spotify token info: {e}")
-        if debug:
-            import traceback
-            click.echo("\n  Full traceback:")
-            click.echo(traceback.format_exc())
 
     # YouTube Music Token Info
     click.echo("\nYOUTUBE MUSIC:")
     click.echo("-" * 70)
     try:
         youtube_auth = YTA()
-        youtube_auth.display_token_info(debug=debug)
+        youtube_auth.display_token_info()
     except Exception as e:
         click.echo(f"  Error retrieving YouTube token info: {e}")
-        if debug:
-            import traceback
-            click.echo("\n  Full traceback:")
-            click.echo(traceback.format_exc())
 
     click.echo("\n" + "=" * 70)
 
