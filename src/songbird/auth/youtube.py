@@ -6,8 +6,12 @@ import boto3
 import os
 import json
 import time
+import re
+import traceback
+from urllib.parse import unquote
 from ytmusicapi import YTMusic
 from dotenv import load_dotenv
+from songbird.utils.s3_utils import validate_s3_bucket, save_json_to_s3, load_json_from_s3
 
 load_dotenv()
 
@@ -15,16 +19,27 @@ load_dotenv()
 class YouTubeAuth:
     """Handles YouTube Music browser cookie authentication"""
 
+    # S3 key for storing auth data
+    AUTH_KEY = 'tokens/youtube_auth.json'
+
+    # Compiled regex patterns for cURL parsing (class-level for performance)
+    HEADER_PATTERNS = [
+        re.compile(r'-H\s+"([^:]+):\s*([^"]+)"', re.IGNORECASE),  # -H "header: value"
+        re.compile(r"-H\s+'([^:]+):\s*([^']+)'", re.IGNORECASE),  # -H 'header: value'
+        re.compile(r'--header\s+"([^:]+):\s*([^"]+)"', re.IGNORECASE),  # --header "header: value"
+        re.compile(r"--header\s+'([^:]+):\s*([^']+)'", re.IGNORECASE),  # --header 'header: value'
+    ]
+
+    COOKIE_PATTERNS = [
+        re.compile(r'-b\s+"([^"]+)"', re.IGNORECASE),  # -b "cookie"
+        re.compile(r"-b\s+'([^']+)'", re.IGNORECASE),  # -b 'cookie'
+        re.compile(r'--cookie\s+"([^"]+)"', re.IGNORECASE),  # --cookie "cookie"
+        re.compile(r"--cookie\s+'([^']+)'", re.IGNORECASE),  # --cookie 'cookie'
+    ]
+
     def __init__(self):
         # S3 configuration (always required)
-        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
-        if not self.s3_bucket:
-            raise ValueError(
-                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
-                "Please set it to your S3 bucket name:\n"
-                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
-            )
-
+        self.s3_bucket = validate_s3_bucket()
         self.s3_client = boto3.client('s3')
 
     def authenticate(self):
@@ -126,7 +141,6 @@ class YouTubeAuth:
             return False
         except Exception as e:
             print(f"\n❌ Authentication error: {e}")
-            import traceback
             traceback.print_exc()
             return False
 
@@ -147,48 +161,25 @@ class YouTubeAuth:
 
     def _parse_curl(self, curl_command):
         """Parse headers from cURL command"""
-        import re
-        from urllib.parse import unquote
-
         # Remove Windows line continuation characters and clean up
         curl_command = curl_command.replace('^', '').replace('\n', ' ').replace('\r', '')
 
         # URL decode any encoded characters
         curl_command = unquote(curl_command)
 
-        # Extract headers from cURL
+        # Extract headers from cURL using pre-compiled patterns
         headers = {}
 
-        # Try multiple header patterns for different cURL formats
-        patterns = [
-            r'-H\s+"([^:]+):\s*([^"]+)"',  # -H "header: value"
-            r"-H\s+'([^:]+):\s*([^']+)'",  # -H 'header: value'
-            r'--header\s+"([^:]+):\s*([^"]+)"',  # --header "header: value"
-            r"--header\s+'([^:]+):\s*([^']+)'",  # --header 'header: value'
-        ]
-
-        for pattern in patterns:
-            matches = re.findall(pattern, curl_command, re.IGNORECASE)
+        for pattern in self.HEADER_PATTERNS:
+            matches = pattern.findall(curl_command)
             for key, value in matches:
-                # Clean up the value
-                value = value.strip()
-                headers[key.lower().strip()] = value
+                headers[key.lower().strip()] = value.strip()
 
-        # Extract cookie separately using -b flag
-        cookie_patterns = [
-            r'-b\s+"([^"]+)"',  # -b "cookie"
-            r"-b\s+'([^']+)'",  # -b 'cookie'
-            r'--cookie\s+"([^"]+)"',  # --cookie "cookie"
-            r"--cookie\s+'([^']+)'",  # --cookie 'cookie'
-        ]
-
-        for pattern in cookie_patterns:
-            cookie_match = re.search(pattern, curl_command, re.IGNORECASE)
+        # Extract cookie separately using -b flag with pre-compiled patterns
+        for pattern in self.COOKIE_PATTERNS:
+            cookie_match = pattern.search(curl_command)
             if cookie_match:
-                cookie_value = cookie_match.group(1)
-                # Clean up cookie value
-                cookie_value = cookie_value.strip()
-                headers['cookie'] = cookie_value
+                headers['cookie'] = cookie_match.group(1).strip()
                 break
 
         # Convert to ytmusicapi format
@@ -241,14 +232,8 @@ class YouTubeAuth:
                 'created_at': time.time()
             }
 
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key='tokens/youtube_auth.json',
-                Body=json.dumps(save_data, indent=2),
-                ServerSideEncryption='AES256',
-                ContentType='application/json'
-            )
-            print(f"✅ Auth data saved to s3://{self.s3_bucket}/tokens/youtube_auth.json")
+            save_json_to_s3(self.s3_client, self.s3_bucket, self.AUTH_KEY, save_data)
+            print(f"✅ Auth data saved to s3://{self.s3_bucket}/{self.AUTH_KEY}")
         except Exception as e:
             print(f"❌ Failed to save auth data to S3: {e}")
             raise
@@ -278,24 +263,25 @@ class YouTubeAuth:
 
         except Exception as e:
             print(f"❌ Error creating YouTube Music client: {e}")
-            import traceback
             traceback.print_exc()
             return None
 
-    def _load_auth(self):
-        """Load authentication data from S3"""
+    def _load_auth(self, silent=False):
+        """Load authentication data from S3
+
+        Args:
+            silent: If True, suppress error output (useful when just checking auth info)
+        """
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.s3_bucket,
-                Key='tokens/youtube_auth.json'
-            )
-            auth_data = json.loads(response['Body'].read())
+            auth_data = load_json_from_s3(self.s3_client, self.s3_bucket, self.AUTH_KEY)
             return auth_data
         except self.s3_client.exceptions.NoSuchKey:
-            print(f"❌ No auth data found in S3. Please run 'songbird auth youtube' first")
+            if not silent:
+                print(f"❌ No auth data found in S3. Please run 'songbird auth youtube' first")
             return None
         except Exception as e:
-            print(f"❌ Failed to load auth data from S3: {e}")
+            if not silent:
+                print(f"❌ Failed to load auth data from S3: {e}")
             return None
 
     def is_authenticated(self):
@@ -321,7 +307,7 @@ class YouTubeAuth:
         Returns:
             Dict with authentication status information
         """
-        auth_data = self._load_auth()
+        auth_data = self._load_auth(silent=True)
 
         if not auth_data:
             return {
@@ -362,7 +348,6 @@ class YouTubeAuth:
                 'message': 'Error reading authentication data'
             }
             if debug:
-                import traceback
                 result['debug_info'] = {
                     'traceback': traceback.format_exc()
                 }

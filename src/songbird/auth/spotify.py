@@ -12,6 +12,7 @@ import threading
 import time
 import requests
 from dotenv import load_dotenv
+from songbird.utils.s3_utils import validate_s3_bucket, save_json_to_s3, load_json_from_s3
 
 load_dotenv()
 
@@ -62,12 +63,7 @@ class SpotifyAuth:
         self.s3_client = boto3.client('s3')
 
         # S3 configuration (always required)
-        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
-        if not self.s3_bucket:
-            raise ValueError(
-                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
-                "Please set it to your S3 bucket name:\n"
-            )
+        self.s3_bucket = validate_s3_bucket()
 
         if not self.client_id or not self.client_secret:
             raise ValueError(
@@ -197,13 +193,7 @@ class SpotifyAuth:
         }
 
         try:
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key='tokens/spotify_tokens.json',
-                Body=json.dumps(token_data, indent=2),
-                ServerSideEncryption='AES256',
-                ContentType='application/json'
-            )
+            save_json_to_s3(self.s3_client, self.s3_bucket, 'tokens/spotify_tokens.json', token_data)
             print(f"✅ Tokens saved to s3://{self.s3_bucket}/tokens/spotify_tokens.json")
         except Exception as e:
             print(f"❌ Failed to save tokens to S3: {e}")
@@ -232,11 +222,7 @@ class SpotifyAuth:
     def _load_tokens(self):
         """Load tokens from S3"""
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.s3_bucket,
-                Key='tokens/spotify_tokens.json'
-            )
-            token_data = json.loads(response['Body'].read())
+            token_data = load_json_from_s3(self.s3_client, self.s3_bucket, 'tokens/spotify_tokens.json')
             return token_data
         except self.s3_client.exceptions.NoSuchKey:
             print(f"❌ No tokens found in S3. Please run 'songbird auth spotify' first")

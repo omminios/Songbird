@@ -2,49 +2,28 @@
 Configuration management for Songbird
 Handles playlist pairs, sync settings, and authentication status
 """
-import os
-import json
-from datetime import datetime, timezone
+import boto3
 from typing import Dict, List, Optional
-from songbird.auth.spotify import SpotifyAuth
-from songbird.auth.youtube import YouTubeAuth
-
-try:
-    import boto3
-    BOTO3_AVAILABLE = True
-except ImportError:
-    BOTO3_AVAILABLE = False
+from songbird.utils.s3_utils import validate_s3_bucket, save_json_to_s3, load_json_from_s3
+from songbird.utils.datetime_utils import utc_now_iso
 
 
 class ConfigManager:
     """Manages configuration, playlist pairs, and sync status"""
 
+    # S3 keys for storing data
+    CONFIG_KEY = 'config.json'
+    ERRORS_KEY = 'errors.json'
+
     def __init__(self):
         # S3 configuration (always required)
-        self.s3_bucket = os.getenv('SONGBIRD_CONFIG_BUCKET')
-        if not self.s3_bucket:
-            raise ValueError(
-                "Missing SONGBIRD_CONFIG_BUCKET environment variable.\n"
-                "Please set it to your S3 bucket name:\n"
-                "  export SONGBIRD_CONFIG_BUCKET=your-bucket-name"
-            )
-
-        if not BOTO3_AVAILABLE:
-            raise ImportError(
-                "boto3 is required for S3 storage.\n"
-                "Install with: pip install boto3"
-            )
-
+        self.s3_bucket = validate_s3_bucket()
         self.s3_client = boto3.client('s3')
 
-    def has_valid_auth(self) -> bool:
-        """Check if both Spotify and YouTube Music are authenticated"""
-        try:
-            spotify_auth = SpotifyAuth()
-            youtube_auth = YouTubeAuth()
-            return spotify_auth.is_authenticated() and youtube_auth.is_authenticated()
-        except Exception:
-            return False
+        # Simple cache for config to reduce S3 calls
+        # Cache is invalidated on any write operation
+        self._config_cache = None
+        self._cache_valid = False
 
     def has_playlist_pairs(self) -> bool:
         """Check if any playlist pairs are configured"""
@@ -52,35 +31,57 @@ class ConfigManager:
         pairs = config.get('playlist_pairs', [])
         return len(pairs) > 0
 
-    def load_config(self) -> Dict:
-        """Load configuration from S3"""
+    def load_config(self, use_cache: bool = True) -> Dict:
+        """Load configuration from S3 with optional caching
+
+        Args:
+            use_cache: If True, return cached config if available (default: True)
+                      Set to False to force fresh S3 read
+        """
+        # Return cached config if valid and caching is enabled
+        if use_cache and self._cache_valid and self._config_cache is not None:
+            return self._config_cache.copy()  # Return copy to prevent external modifications
+
+        # Load from S3
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.s3_bucket,
-                Key='config.json'
-            )
-            config_data = json.loads(response['Body'].read())
+            config_data = load_json_from_s3(self.s3_client, self.s3_bucket, self.CONFIG_KEY)
+
+            # Update cache
+            self._config_cache = config_data
+            self._cache_valid = True
+
             return config_data
         except self.s3_client.exceptions.NoSuchKey:
             # No config in S3 yet, return default
-            return self._get_default_config()
+            config_data = self._get_default_config()
+            self._config_cache = config_data
+            self._cache_valid = True
+            return config_data
         except Exception as e:
             print(f"❌ Failed to load config from S3: {e}")
-            return self._get_default_config()
+            config_data = self._get_default_config()
+            # Don't cache on error - might be temporary S3 issue
+            return config_data
 
     def save_config(self, config: Dict):
-        """Save configuration to S3"""
+        """Save configuration to S3 and update cache"""
         try:
-            self.s3_client.put_object(
-                Bucket=self.s3_bucket,
-                Key='config.json',
-                Body=json.dumps(config, indent=2),
-                ServerSideEncryption='AES256',
-                ContentType='application/json'
-            )
+            save_json_to_s3(self.s3_client, self.s3_bucket, self.CONFIG_KEY, config)
+
+            # Update cache after successful save
+            self._config_cache = config
+            self._cache_valid = True
+
         except Exception as e:
             print(f"❌ Failed to save config to S3: {e}")
+            # Invalidate cache on save failure
+            self._cache_valid = False
             raise
+
+    def invalidate_cache(self):
+        """Manually invalidate the config cache (force next load from S3)"""
+        self._cache_valid = False
+        self._config_cache = None
 
     def _get_default_config(self) -> Dict:
         """Return default configuration"""
@@ -90,8 +91,7 @@ class ConfigManager:
                 'schedule': 'daily',
                 'last_sync': None,
                 'sync_deletions': True
-            },
-            'error_log': []
+            }
         }
 
     def add_playlist_pair(self, spotify_playlist: Dict, youtube_playlist: Dict):
@@ -109,7 +109,7 @@ class ConfigManager:
                 'id': youtube_playlist['id'],
                 'name': youtube_playlist['name']
             },
-            'created_at': datetime.now(timezone.utc).isoformat(),
+            'created_at': utc_now_iso(),
             'last_sync': None
         }
 
@@ -138,14 +138,14 @@ class ConfigManager:
 
         for pair in pairs:
             if pair.get('id') == pair_id:
-                pair['last_sync'] = datetime.now(timezone.utc).isoformat()
+                pair['last_sync'] = utc_now_iso()
                 pair['last_sync_status'] = status
                 if details:
                     pair['last_sync_details'] = details
                 break
 
         # Update global sync status
-        config['sync_settings']['last_sync'] = datetime.now(timezone.utc).isoformat()
+        config['sync_settings']['last_sync'] = utc_now_iso()
         self.save_config(config)
 
     def get_playlist_snapshot(self, pair_id: int) -> Dict:
@@ -172,7 +172,7 @@ class ConfigManager:
                     'youtube_count': youtube_count,
                     'spotify_snapshot_id': spotify_snapshot_id,
                     'youtube_snapshot_id': youtube_snapshot_id,
-                    'updated_at': datetime.now(timezone.utc).isoformat()
+                    'updated_at': utc_now_iso()
                 }
                 break
 
@@ -194,37 +194,57 @@ class ConfigManager:
         }
 
     def log_error(self, error_type: str, message: str, details: Dict = None):
-        """Log an error to the configuration"""
-        config = self.load_config()
-
+        """Log an error to separate errors file (optimized for write performance)"""
         error_entry = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': utc_now_iso(),
             'type': error_type,
             'message': message,
             'details': details or {}
         }
 
-        if 'error_log' not in config:
-            config['error_log'] = []
+        try:
+            # Load existing errors
+            errors = self._load_errors()
+            errors.append(error_entry)
 
-        config['error_log'].append(error_entry)
+            # Keep only last 100 errors
+            errors = errors[-100:]
 
-        # Keep only last 100 errors
-        config['error_log'] = config['error_log'][-100:]
+            # Save errors
+            self._save_errors(errors)
 
-        self.save_config(config)
+        except Exception as e:
+            print(f"⚠️  Failed to log error to S3: {e}")
+            # Don't raise - error logging should not break the application
 
     def get_errors(self, limit: int = 10) -> List[Dict]:
-        """Get recent errors"""
-        config = self.load_config()
-        errors = config.get('error_log', [])
+        """Get recent errors from separate errors file"""
+        errors = self._load_errors()
         return errors[-limit:]
 
     def clear_errors(self):
         """Clear all logged errors"""
-        config = self.load_config()
-        config['error_log'] = []
-        self.save_config(config)
+        self._save_errors([])
+
+    def _load_errors(self) -> List[Dict]:
+        """Load errors from separate S3 file"""
+        try:
+            errors = load_json_from_s3(self.s3_client, self.s3_bucket, self.ERRORS_KEY)
+            return errors if isinstance(errors, list) else []
+        except self.s3_client.exceptions.NoSuchKey:
+            # No errors file yet
+            return []
+        except Exception as e:
+            print(f"⚠️  Failed to load errors from S3: {e}")
+            return []
+
+    def _save_errors(self, errors: List[Dict]):
+        """Save errors to separate S3 file"""
+        try:
+            save_json_to_s3(self.s3_client, self.s3_bucket, self.ERRORS_KEY, errors)
+        except Exception as e:
+            print(f"⚠️  Failed to save errors to S3: {e}")
+            # Don't raise - error logging should not break the application
 
     def clear_snapshots(self):
         """Clear all playlist snapshots (force re-sync on next run)"""
@@ -242,6 +262,8 @@ class ConfigManager:
         """Reset all configuration to defaults"""
         default_config = self._get_default_config()
         self.save_config(default_config)
+        # Also clear errors since they're in a separate file now
+        self.clear_errors()
         print("✅ Configuration reset to defaults")
         print("   - All playlist pairs removed")
         print("   - Sync history cleared")
