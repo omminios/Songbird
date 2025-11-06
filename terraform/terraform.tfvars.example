@@ -1,0 +1,7 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored for security
+
+aws_region            = "your_region"
+songbird_bucket_name  = "your_s3_bucket"
+spotify_client_id     = "your_spotify_client_id_here"
+spotify_client_secret = "your_spotify_client_secret_here"

@@ -2,9 +2,6 @@
 Sync manager for coordinating playlist synchronization
 Handles the main sync logic and orchestrates all components
 """
-import json
-import boto3
-import requests
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 from songbird.config.manager import ConfigManager
@@ -23,8 +20,10 @@ class SyncManager:
 
     def manual_sync(self, verbose: bool = False, force: bool = False, dry_run: bool = False) -> bool:
         """
-        Trigger manual sync via AWS Lambda or local execution
+        Trigger manual sync from CLI
         Returns True if sync was successful
+
+        Note: Scheduled syncs are triggered by EventBridge -> Lambda
         """
         pairs = self.config_manager.get_playlist_pairs()
         if not pairs:
@@ -32,17 +31,18 @@ class SyncManager:
             return False
 
         try:
-            # For now, run sync locally
-            # TODO: Replace with AWS Lambda invocation
-            return self._run_local_sync(verbose=verbose, force=force, dry_run=dry_run)
+            return self.run_sync(verbose=verbose, force=force, dry_run=dry_run)
 
         except Exception as e:
             self.config_manager.log_error('manual_sync', str(e))
             print(f"Manual sync failed: {e}")
             return False
 
-    def _run_local_sync(self, verbose: bool = False, force: bool = False, dry_run: bool = False) -> bool:
-        """Run synchronization locally (for testing/development)"""
+    def run_sync(self, verbose: bool = False, force: bool = False, dry_run: bool = False) -> bool:
+        """
+        Core synchronization logic - works in both CLI and Lambda environments
+        Returns True if sync was successful
+        """
         if dry_run:
             print("🔍 Analyzing playlists (dry run - no changes will be made)...")
         else:
@@ -523,51 +523,3 @@ class SyncManager:
             unmatched_data
         )
 
-    def invoke_lambda_sync(self) -> bool:
-        """
-        Invoke AWS Lambda function for sync
-        TODO: Implement when AWS infrastructure is ready
-        """
-        try:
-            # This would invoke the Lambda function
-            lambda_client = boto3.client('lambda')
-
-            response = lambda_client.invoke(
-                FunctionName='songbird-sync',
-                InvocationType='RequestResponse',
-                Payload=json.dumps({
-                    'trigger': 'manual',
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                })
-            )
-
-            result = json.loads(response['Payload'].read())
-            return result.get('success', False)
-
-        except Exception as e:
-            print(f"Lambda invocation failed: {e}")
-            return False
-
-    def invoke_api_gateway_sync(self) -> bool:
-        """
-        Invoke sync via API Gateway endpoint
-        TODO: Implement when API Gateway is set up
-        """
-        try:
-            # This would call the API Gateway endpoint
-            api_endpoint = "https://your-api-gateway-url/sync"
-
-            response = requests.post(
-                api_endpoint,
-                json={
-                    'trigger': 'manual',
-                    'timestamp': datetime.now(timezone.utc).isoformat()
-                },
-                timeout=30
-            )
-
-            return response.status_code == 200
-
-        except Exception as e:
-            print(f"API Gateway invocation failed: {e}")
-            return False

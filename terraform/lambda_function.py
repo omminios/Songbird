@@ -40,7 +40,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         sync_manager = SyncManager()
 
         # Perform synchronization
-        sync_result = sync_manager._run_local_sync()  # This would be renamed to _run_lambda_sync
+        # verbose=True for CloudWatch logging, force=False to skip unchanged playlists
+        sync_result = sync_manager.run_sync(verbose=True, force=False)
 
         # Prepare response
         response = {

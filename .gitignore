@@ -54,10 +54,37 @@ htmlcov/
 # AWS / DEPLOYMENT
 # ============================================================================
 
+# Terraform state files (contain sensitive resource data)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+
+# Terraform variable files (contain secrets and sensitive values)
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+# Exception: allow example variable files
+!*.tfvars.example
+!terraform.tfvars.example
+
+# Terraform directory and modules
+.terraform/
+.terraform.lock.hcl
+
+# Terraform crash logs
+crash.log
+crash.*.log
+
+# Terraform plan files (may contain sensitive data)
+*.tfplan
+*.tfplan.*
+
 # Lambda deployment packages
 *.zip
-lambda_package.zip
-aws/package/
+lambda_function.zip
+terraform/lambda_package/
+terraform/lambda_deployment.zip
 
 
 # ============================================================================
