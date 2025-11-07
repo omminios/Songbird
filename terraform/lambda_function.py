@@ -5,7 +5,7 @@ This function handles both scheduled and manual sync triggers
 import json
 import os
 import boto3
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 # Import Songbird modules
@@ -47,7 +47,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         response = {
             'success': sync_result,
             'trigger': trigger_source,
-            'timestamp': datetime.now(datetime.UTC).isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'message': 'Sync completed successfully' if sync_result else 'Sync failed'
         }
 
@@ -80,7 +80,7 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
         error_response = {
             'success': False,
             'error': error_message,
-            'timestamp': datetime.now(datetime.UTC).isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
 
         if _determine_trigger_source(event) == 'api_gateway':
@@ -206,7 +206,7 @@ if __name__ == '__main__':
     # Test event for manual trigger
     test_event = {
         'trigger': 'manual',
-        'timestamp': datetime.now(datetime.UTC).isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }
 
     result = lambda_handler(test_event, None)
