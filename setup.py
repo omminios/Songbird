@@ -2,9 +2,14 @@
 Setup script for Songbird CLI
 """
 from setuptools import setup, find_packages
+import os
 
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+# Read long description from README if it exists
+long_description = "Sync playlists between Spotify and YouTube Music"
+readme_path = os.path.join(os.path.dirname(__file__), "README.md")
+if os.path.exists(readme_path):
+    with open(readme_path, "r", encoding="utf-8") as fh:
+        long_description = fh.read()
 
 setup(
     name="songbird",
