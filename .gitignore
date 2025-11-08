@@ -44,7 +44,12 @@ build/
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
+coverage.xml
+.tox/
+*.cover
+.hypothesis/
 
 # Type checking
 .mypy_cache/
@@ -85,6 +90,9 @@ crash.*.log
 lambda_function.zip
 terraform/lambda_package/
 terraform/lambda_deployment.zip
+
+# GitHub Actions test response
+response.json
 
 
 # ============================================================================
